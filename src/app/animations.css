@@ -1,0 +1,1009 @@
+/* --- Filmora-style Animations --- */
+
+/* ✅ BASIC ENTRY ANIMATIONS */
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes boom {
+    0% {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* ✅ BOUNCE / SPRING ANIMATIONS */
+@keyframes bounce-left {
+    0% {
+        opacity: 0;
+        transform: translateX(-100%);
+    }
+
+    60% {
+        transform: translateX(20px);
+    }
+
+    80% {
+        transform: translateX(-10px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes bounce-right {
+    0% {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+
+    60% {
+        transform: translateX(-20px);
+    }
+
+    80% {
+        transform: translateX(10px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes bounce-up {
+    0% {
+        opacity: 0;
+        transform: translateY(100%);
+    }
+
+    60% {
+        transform: translateY(-20px);
+    }
+
+    80% {
+        transform: translateY(10px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes bounce-down {
+    0% {
+        opacity: 0;
+        transform: translateY(-100%);
+    }
+
+    60% {
+        transform: translateY(20px);
+    }
+
+    80% {
+        transform: translateY(-10px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ✅ ROTATION-BASED ANIMATIONS */
+@keyframes rotate-cw-1 {
+    from {
+        opacity: 0;
+        transform: rotate(-360deg);
+    }
+
+    to {
+        opacity: 1;
+        transform: rotate(0deg);
+    }
+}
+
+@keyframes rotate-cw-2 {
+    from {
+        opacity: 0;
+        transform: rotate(-180deg);
+    }
+
+    to {
+        opacity: 1;
+        transform: rotate(0deg);
+    }
+}
+
+@keyframes rotate-ccw {
+    from {
+        opacity: 0;
+        transform: rotate(360deg);
+    }
+
+    to {
+        opacity: 1;
+        transform: rotate(0deg);
+    }
+}
+
+@keyframes spin-open {
+    0% {
+        opacity: 0;
+        transform: scale(0.1) rotate(720deg);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+    }
+}
+
+@keyframes spin-1 {
+    from {
+        opacity: 0;
+        transform: rotate(-90deg) scale(0.5);
+    }
+
+    to {
+        opacity: 1;
+        transform: rotate(0deg) scale(1);
+    }
+}
+
+/* ✅ SLIDE / MOVE ANIMATIONS */
+@keyframes slide-down-up-1 {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes move-left {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes move-right {
+    from {
+        transform: translateX(-100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes move-top {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes move-bottom {
+    from {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ✅ FADE + MOVEMENT ANIMATIONS */
+@keyframes fade-slide-left {
+    from {
+        opacity: 0;
+        transform: translateX(50px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes fade-slide-right {
+    from {
+        opacity: 0;
+        transform: translateX(-50px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes fade-slide-up {
+    from {
+        opacity: 0;
+        transform: translateY(50px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fade-slide-down {
+    from {
+        opacity: 0;
+        transform: translateY(-50px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fade-zoom-in {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes fade-zoom-out {
+    from {
+        opacity: 0;
+        transform: scale(1.2);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* ✅ BLUR / FLASH / DISTORTION EFFECTS */
+@keyframes motion-blur {
+    0% {
+        opacity: 0;
+        filter: blur(20px);
+        transform: scale(1.1);
+    }
+
+    100% {
+        opacity: 1;
+        filter: blur(0);
+        transform: scale(1);
+    }
+}
+
+@keyframes blur-in {
+    0% {
+        opacity: 0;
+        filter: blur(10px);
+    }
+
+    100% {
+        opacity: 1;
+        filter: blur(0);
+    }
+}
+
+@keyframes blurry-eject {
+    0% {
+        opacity: 0;
+        transform: scale(0.5);
+        filter: blur(5px);
+    }
+
+    60% {
+        transform: scale(1.05);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+    }
+}
+
+@keyframes flash-drop {
+    0% {
+        opacity: 0;
+        filter: brightness(3) blur(10px);
+        transform: translateY(-50px);
+    }
+
+    100% {
+        opacity: 1;
+        filter: brightness(1) blur(0);
+        transform: translateY(0);
+    }
+}
+
+@keyframes flash-open {
+    0% {
+        opacity: 0;
+        filter: brightness(5);
+        transform: scale(0.5);
+    }
+
+    100% {
+        opacity: 1;
+        filter: brightness(1);
+        transform: scale(1);
+    }
+}
+
+@keyframes black-hole {
+    0% {
+        opacity: 0;
+        transform: scale(0) rotate(180deg);
+        filter: contrast(2);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1) rotate(0);
+        filter: contrast(1);
+    }
+}
+
+@keyframes pixelated-motion {
+    0% {
+        opacity: 0;
+        filter: blur(10px) contrast(2);
+    }
+
+    100% {
+        opacity: 1;
+        filter: blur(0) contrast(1);
+    }
+}
+
+@keyframes screen-flicker {
+    0% {
+        opacity: 0;
+        filter: brightness(0.5);
+    }
+
+    20% {
+        opacity: 0.5;
+        filter: brightness(2);
+    }
+
+    40% {
+        opacity: 0.2;
+    }
+
+    60% {
+        opacity: 1;
+        filter: brightness(1.5);
+    }
+
+    80% {
+        opacity: 0.8;
+    }
+
+    100% {
+        opacity: 1;
+        filter: brightness(1);
+    }
+}
+
+@keyframes pulse-open {
+    0% {
+        opacity: 0;
+        transform: scale(1.2);
+        filter: blur(2px);
+    }
+
+    50% {
+        transform: scale(0.9);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+    }
+}
+
+@keyframes rgb-drop {
+    0% {
+        filter: drop-shadow(5px 5px 0px red) drop-shadow(-5px -5px 0px blue);
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+
+    100% {
+        filter: drop-shadow(0 0 0 red) drop-shadow(0 0 0 blue);
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ✅ CREATIVE SHAPE / MASK ANIMATIONS */
+@keyframes round-open {
+    0% {
+        clip-path: circle(0% at 50% 50%);
+        opacity: 0;
+    }
+
+    100% {
+        clip-path: circle(100% at 50% 50%);
+        opacity: 1;
+    }
+}
+
+@keyframes expansion {
+    0% {
+        transform: scaleX(0);
+        opacity: 0;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes old-tv {
+    0% {
+        transform: scaleY(0.01) scaleX(0);
+        filter: brightness(5);
+        opacity: 0;
+    }
+
+    50% {
+        transform: scaleY(0.01) scaleX(1);
+        filter: brightness(2);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scaleY(1) scaleX(1);
+        filter: brightness(1);
+        opacity: 1;
+    }
+}
+
+@keyframes shard-roll {
+    0% {
+        clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+        transform: rotate(360deg) scale(0);
+        opacity: 0;
+    }
+
+    100% {
+        clip-path: polygon(0% 0%, 0% 100%, 100% 100%, 100% 0%);
+        transform: rotate(0deg) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes tear-paper {
+    0% {
+        clip-path: polygon(0 0, 100% 0, 100% 0, 0 0);
+        opacity: 0;
+    }
+
+    100% {
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+        opacity: 1;
+    }
+}
+
+/* ✅ FLIP ANIMATIONS */
+@keyframes flip-down-1 {
+    0% {
+        opacity: 0;
+        transform: perspective(1000px) rotateX(90deg);
+    }
+
+    100% {
+        opacity: 1;
+        transform: perspective(1000px) rotateX(0);
+    }
+}
+
+@keyframes flip-down-2 {
+    0% {
+        opacity: 0;
+        transform: perspective(1000px) rotateX(90deg) scale(0.8);
+    }
+
+    100% {
+        opacity: 1;
+        transform: perspective(1000px) rotateX(0) scale(1);
+    }
+}
+
+@keyframes flip-up-1 {
+    0% {
+        opacity: 0;
+        transform: perspective(1000px) rotateX(-90deg);
+    }
+
+    100% {
+        opacity: 1;
+        transform: perspective(1000px) rotateX(0);
+    }
+}
+
+@keyframes flip-up-2 {
+    0% {
+        opacity: 0;
+        transform: perspective(1000px) rotateX(-90deg) scale(0.8);
+    }
+
+    100% {
+        opacity: 1;
+        transform: perspective(1000px) rotateX(0) scale(1);
+    }
+}
+
+/* ✅ FLY / ROTATE / GROW EFFECTS */
+@keyframes fly-in-rotate {
+    0% {
+        opacity: 0;
+        transform: translateX(-100%) rotate(-90deg);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0) rotate(0);
+    }
+}
+
+@keyframes fly-in-flip {
+    0% {
+        opacity: 0;
+        transform: translateX(-100%) rotateY(90deg);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0) rotateY(0);
+    }
+}
+
+@keyframes fly-to-zoom {
+    0% {
+        opacity: 0;
+        transform: scale(0) translateX(-100%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1) translateX(0);
+    }
+}
+
+@keyframes grow-shrink {
+    0% {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+
+    60% {
+        transform: scale(1.2);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* ✅ STRETCH ANIMATIONS */
+@keyframes stretch-in-left {
+    0% {
+        opacity: 0;
+        transform: scaleX(2) translateX(-50%);
+        filter: blur(5px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scaleX(1) translateX(0);
+        filter: blur(0);
+    }
+}
+
+@keyframes stretch-in-right {
+    0% {
+        opacity: 0;
+        transform: scaleX(2) translateX(50%);
+        filter: blur(5px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scaleX(1) translateX(0);
+        filter: blur(0);
+    }
+}
+
+@keyframes stretch-in-up {
+    0% {
+        opacity: 0;
+        transform: scaleY(2) translateY(50%);
+        filter: blur(5px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scaleY(1) translateY(0);
+        filter: blur(0);
+    }
+}
+
+@keyframes stretch-in-down {
+    0% {
+        opacity: 0;
+        transform: scaleY(2) translateY(-50%);
+        filter: blur(5px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scaleY(1) translateY(0);
+        filter: blur(0);
+    }
+}
+
+@keyframes stretch-to-full {
+    0% {
+        opacity: 0;
+        transform: scale(0.5);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* ✅ POSITION BASED */
+@keyframes to-left-1 {
+    0% {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes to-left-2 {
+    0% {
+        opacity: 0;
+        transform: translateX(50%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes to-right-1 {
+    0% {
+        opacity: 0;
+        transform: translateX(-100%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes to-right-2 {
+    0% {
+        opacity: 0;
+        transform: translateX(-50%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes up-down-1 {
+    0% {
+        transform: translateY(-20px);
+        opacity: 0;
+    }
+
+    20% {
+        transform: translateY(20px);
+    }
+
+    40% {
+        transform: translateY(-10px);
+    }
+
+    60% {
+        transform: translateY(10px);
+    }
+
+    80% {
+        transform: translateY(-5px);
+    }
+
+    100% {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes up-down-2 {
+    0% {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+
+    100% {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes pan-enter-left {
+    0% {
+        opacity: 0;
+        transform: translateX(-100%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes pan-enter-right {
+    0% {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes shake-up-down {
+    0% {
+        transform: translateY(-20px);
+        opacity: 0;
+    }
+
+    20% {
+        transform: translateY(20px);
+    }
+
+    40% {
+        transform: translateY(-10px);
+    }
+
+    60% {
+        transform: translateY(10px);
+    }
+
+    80% {
+        transform: translateY(-5px);
+    }
+
+    100% {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* ✅ ZOOM ENTRY ANIMATIONS */
+@keyframes tiny-zoom {
+    0% {
+        opacity: 0;
+        transform: scale(0.1);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-in-center {
+    0% {
+        opacity: 0;
+        transform: scale(0);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-in-left {
+    0% {
+        opacity: 0;
+        transform: scale(0);
+        transform-origin: left center;
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        transform-origin: center center;
+    }
+}
+
+@keyframes zoom-in-right {
+    0% {
+        opacity: 0;
+        transform: scale(0);
+        transform-origin: right center;
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        transform-origin: center center;
+    }
+}
+
+@keyframes zoom-in-top {
+    0% {
+        opacity: 0;
+        transform: scale(0);
+        transform-origin: top center;
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        transform-origin: center center;
+    }
+}
+
+@keyframes zoom-in-bottom {
+    0% {
+        opacity: 0;
+        transform: scale(0);
+        transform-origin: bottom center;
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        transform-origin: center center;
+    }
+}
+
+@keyframes zoom-in-1 {
+    0% {
+        opacity: 0;
+        transform: scale(0.5);
+    }
+
+    60% {
+        transform: scale(1.1);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-in-2 {
+    0% {
+        opacity: 0;
+        transform: scale(0.2);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-out-1 {
+    0% {
+        opacity: 0;
+        transform: scale(1.5);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-out-2 {
+    0% {
+        opacity: 0;
+        transform: scale(2);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-out-3 {
+    0% {
+        opacity: 0;
+        transform: scale(3);
+        filter: blur(5px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+    }
+}
+
+@keyframes wham {
+    0% {
+        opacity: 0;
+        transform: scale(2) rotate(10deg);
+        filter: blur(10px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1) rotate(0);
+        filter: blur(0);
+    }
+}
