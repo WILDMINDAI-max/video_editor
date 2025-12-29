@@ -1233,6 +1233,24 @@ export class ExportEngine {
                     }
                     : { brightness: 1 - p * 0.3 };
             }
+            case 'iris-cross': {
+                // Plus-shape expanding from center
+                const easeCross = easeOutCubic(p);
+                const w = 20 + (80 * easeCross);
+                const halfW = w / 2;
+                return role === 'main'
+                    ? {
+                        clipType: 'polygon', clipPolygon: [
+                            { x: 50 - halfW, y: 0 }, { x: 50 + halfW, y: 0 },
+                            { x: 50 + halfW, y: 50 - halfW }, { x: 100, y: 50 - halfW },
+                            { x: 100, y: 50 + halfW }, { x: 50 + halfW, y: 50 + halfW },
+                            { x: 50 + halfW, y: 100 }, { x: 50 - halfW, y: 100 },
+                            { x: 50 - halfW, y: 50 + halfW }, { x: 0, y: 50 + halfW },
+                            { x: 0, y: 50 - halfW }, { x: 50 - halfW, y: 50 - halfW }
+                        ], brightness: 0.7 + 0.3 * p
+                    }
+                    : { brightness: 1 - p * 0.3 };
+            }
 
             // === WIPES ===
             case 'wipe': {
@@ -1253,6 +1271,44 @@ export class ExportEngine {
                 return role === 'main'
                     ? { clipType: 'inset', clipInset: { top: 0, right: insetX, bottom: 0, left: insetX }, brightness: 0.7 + 0.3 * p }
                     : { brightness: 1 - p * 0.3 };
+            }
+            case 'split': {
+                // Split from center
+                const easeS = easeOutCubic(p);
+                const insetH = 50 * (1 - easeS);
+                const insetV = 50 * (1 - easeS);
+                return role === 'main'
+                    ? { clipType: 'inset', clipInset: direction === 'up' || direction === 'down' ? { top: insetV, right: 0, bottom: insetV, left: 0 } : { top: 0, right: insetH, bottom: 0, left: insetH } }
+                    : {};
+            }
+            case 'clock-wipe':
+            case 'radial-wipe': {
+                // Clock wipe - approximated with circle expanding
+                const easeC = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'circle', clipCircle: { radius: easeC * 75, cx: 50, cy: 50 } }
+                    : {};
+            }
+            case 'venetian-blinds': {
+                // Simplified venetian blinds as horizontal wipe
+                const easeV = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeV * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p }
+                    : { brightness: 1 - p * 0.2 };
+            }
+            case 'checker-wipe': {
+                // Simplified checker as dissolve with opacity
+                const easeChk = easeOutCubic(p);
+                return role === 'main'
+                    ? { opacity: easeChk, brightness: 0.8 + 0.2 * p }
+                    : { opacity: 1 - easeChk * 0.7, brightness: 1 - p * 0.2 };
+            }
+            case 'zig-zag': {
+                // Simplified zig-zag as diagonal wipe
+                const easeZ = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeZ * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p }
+                    : { brightness: 1 - p * 0.2 };
             }
 
             // === ZOOMS ===
@@ -1277,6 +1333,74 @@ export class ExportEngine {
                 return role === 'outgoing'
                     ? { rotate: p * 360, scale: outP, opacity: outP }
                     : { rotate: (1 - p) * -360, scale: p, opacity: p };
+            case 'spin-3d':
+                return role === 'main'
+                    ? { rotate: (1 - p) * -90, opacity: p }
+                    : { rotate: p * 90, opacity: outP };
+
+            // === 3D TRANSITIONS ===
+            case 'cube-rotate': {
+                const cubeEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { rotate: (1 - cubeEase) * -90, brightness: 0.7 + cubeEase * 0.3, opacity: cubeEase }
+                    : { rotate: cubeEase * 90, brightness: 1 - cubeEase * 0.3, opacity: 1 - cubeEase };
+            }
+            case 'flip-3d': {
+                const flipEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { scaleY: flipEase, brightness: 0.6 + flipEase * 0.4, opacity: flipEase }
+                    : { scaleY: 1 - flipEase, brightness: 1 - flipEase * 0.4, opacity: 1 - flipEase };
+            }
+            case 'page-curl':
+            case 'page-peel': {
+                const peelEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { rotate: (1 - peelEase) * -5, opacity: peelEase }
+                    : { brightness: 1 - peelEase * 0.2 };
+            }
+
+            // === SHAPES ===
+            case 'shape-circle': {
+                const circleEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'circle', clipCircle: { radius: circleEase * 75, cx: 50, cy: 50 } }
+                    : {};
+            }
+            case 'shape-heart':
+            case 'heart': {
+                const heartEase = easeOutCubic(p);
+                const heartSize = heartEase * 50;
+                return role === 'main'
+                    ? {
+                        clipType: 'polygon', clipPolygon: [
+                            { x: 50, y: 50 + heartSize },
+                            { x: 50 - heartSize, y: 50 - heartSize * 0.4 },
+                            { x: 50, y: 50 - heartSize },
+                            { x: 50 + heartSize, y: 50 - heartSize * 0.4 }
+                        ]
+                    }
+                    : {};
+            }
+            case 'shape-triangle':
+            case 'triangle': {
+                const triEase = easeOutCubic(p);
+                const triSize = triEase * 50;
+                return role === 'main'
+                    ? {
+                        clipType: 'polygon', clipPolygon: [
+                            { x: 50, y: 50 - triSize },
+                            { x: 50 + triSize, y: 50 + triSize },
+                            { x: 50 - triSize, y: 50 + triSize }
+                        ]
+                    }
+                    : {};
+            }
+            case 'mosaic-grid': {
+                const mosaicEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { scale: 0.5 + 0.5 * mosaicEase, opacity: mosaicEase }
+                    : {};
+            }
 
             // === FLASH ===
             case 'flash':
@@ -1332,14 +1456,17 @@ export class ExportEngine {
                 const burnIntensity = Math.sin(p * Math.PI);
                 return {
                     brightness: 1 + burnIntensity * 3,
+                    sepia: burnIntensity * 0.5,
+                    saturate: 1 + burnIntensity,
+                    contrast: 1 - burnIntensity * 0.2,
                     scale: 1 + burnIntensity * 0.1,
                     opacity: role === 'main' ? p : outP
                 };
             }
             case 'light-leak':
                 return role === 'main'
-                    ? { brightness: 1 + (1 - p), opacity: p }
-                    : { brightness: 1 + p, opacity: outP };
+                    ? { sepia: 1 - p, brightness: 1 + (1 - p), opacity: p }
+                    : { sepia: p, brightness: 1 + p, opacity: outP };
             case 'luma-dissolve': {
                 const lumaP = 1 - Math.pow(1 - p, 2);
                 return role === 'main'
@@ -1419,6 +1546,66 @@ export class ExportEngine {
                 return role === 'main'
                     ? { scale: 0.5 + p * 0.5, brightness: 1 + (1 - p) * 5, opacity: p }
                     : { scale: 1 - p * 0.5, brightness: 1 + p * 5, opacity: outP };
+
+            // === ADDITIONAL TRANSITIONS (from Canvas.tsx) ===
+            case 'fade-color': {
+                if (role === 'outgoing') {
+                    if (p < 0.5) {
+                        const fade = p * 2;
+                        return { brightness: 1 - fade * 0.5, saturate: 1 - fade * 0.7, opacity: 1 - Math.pow(fade, 1.5) };
+                    }
+                    return { opacity: 0.01 };
+                }
+                if (p > 0.5) {
+                    const fade = (p - 0.5) * 2;
+                    return { brightness: 0.5 + fade * 0.5, saturate: 0.3 + fade * 0.7, opacity: Math.pow(fade, 0.7) };
+                }
+                return { opacity: 0.01 };
+            }
+            case 'brush-reveal': {
+                const brushEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'circle', clipCircle: { radius: brushEase * 75, cx: 50, cy: 50 }, contrast: 1.2, sepia: 0.2 }
+                    : {};
+            }
+            case 'ink-splash': {
+                const inkEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'circle', clipCircle: { radius: inkEase * 75, cx: 50, cy: 50 }, contrast: 1.5 }
+                    : {};
+            }
+            case 'speed-blur':
+                return role === 'main'
+                    ? { scale: 1.2, opacity: p }
+                    : { scale: 0.8, opacity: outP };
+            case 'warp-zoom':
+                return role === 'main'
+                    ? { scale: 0.5 + p * 0.5, opacity: p }
+                    : { scale: 1 + p * 1.5, opacity: outP };
+            case 'band-slide':
+                return role === 'main'
+                    ? { translateX: xMult * 100 * outP, translateY: yMult * 100 * outP }
+                    : { translateX: xMult * -100 * p, translateY: yMult * -100 * p };
+            case 'multi-panel': {
+                const panelEase = easeOutCubic(p);
+                return role === 'main'
+                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - panelEase * 100, bottom: 0, left: 0 }, scale: 0.8 + 0.2 * panelEase }
+                    : {};
+            }
+            case 'split-screen': {
+                const splitEase = easeOutCubic(p);
+                const ss = 50 * (1 - splitEase);
+                return role === 'main'
+                    ? { clipType: 'inset', clipInset: { top: 0, right: ss, bottom: 0, left: ss } }
+                    : {};
+            }
+            case 'simple-wipe':
+                return role === 'main'
+                    ? { clipType: 'inset', clipInset: direction === 'left' ? { top: 0, right: 100 - p * 100, bottom: 0, left: 0 } : direction === 'right' ? { top: 0, right: 0, bottom: 0, left: 100 - p * 100 } : direction === 'up' ? { top: 100 - p * 100, right: 0, bottom: 0, left: 0 } : { top: 0, right: 0, bottom: 100 - p * 100, left: 0 } }
+                    : {};
+            case 'fade-dissolve':
+                if (role === 'outgoing') return { opacity: p < 0.5 ? 1 - p * 2 : 0.05 };
+                return { opacity: p > 0.5 ? (p - 0.5) * 2 : 0.05 };
 
             // DEFAULT
             default:
@@ -2264,13 +2451,13 @@ export class ExportEngine {
                 return { scale: 3 - 2 * p, opacity: p, blur: 5 * (1 - p) };
 
             case 'wham':
-                // Quick overshoot zoom
+                // Quick overshoot zoom with blur and rotate (from CSS)
                 if (progress < 0.7) {
                     const t = progress / 0.7;
-                    return { scale: 0.3 + 0.8 * t, opacity: t };
+                    return { scale: 2 - 0.9 * t, rotate: 10 - 10 * t, blur: 10 * (1 - t), opacity: t };
                 } else {
                     const t = (progress - 0.7) / 0.3;
-                    return { scale: 1.1 - 0.1 * t, opacity: 1 };
+                    return { scale: 1.1 - 0.1 * t, rotate: 0, blur: 0, opacity: 1 };
                 }
 
             // === POSITION-BASED ===
@@ -2297,6 +2484,21 @@ export class ExportEngine {
 
             case 'up-down-2':
                 return { translateY: 20 - 20 * p, opacity: p };
+
+            // Missing animations from CSS
+            case 'pan-enter-left':
+                return { translateX: -100 + 100 * p, opacity: p };
+
+            case 'pan-enter-right':
+                return { translateX: 100 - 100 * p, opacity: p };
+
+            case 'shake-up-down':
+                // Multi-keyframe shake (same as up-down-1)
+                if (progress < 0.2) return { translateY: lerp(-20, 20, progress / 0.2), opacity: progress * 5 };
+                if (progress < 0.4) return { translateY: lerp(20, -10, (progress - 0.2) / 0.2), opacity: 1 };
+                if (progress < 0.6) return { translateY: lerp(-10, 10, (progress - 0.4) / 0.2), opacity: 1 };
+                if (progress < 0.8) return { translateY: lerp(10, -5, (progress - 0.6) / 0.2), opacity: 1 };
+                return { translateY: lerp(-5, 0, (progress - 0.8) / 0.2), opacity: 1 };
 
             default:
                 return { opacity: p };
