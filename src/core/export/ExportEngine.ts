@@ -12,6 +12,7 @@ import { gpuCompositor } from '../compositor/GPUCompositor';
 import { hardwareAccel } from '../engine/HardwareAccel';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
+import { audioMixer } from './AudioMixer';
 // NOTE: FFmpegExportService is imported dynamically to prevent Next.js bundling issues
 
 export type ExportMode = 'auto' | 'ffmpeg' | 'webcodecs' | 'mediarecorder';
@@ -58,6 +59,9 @@ export class ExportEngine {
     private cancelled: boolean = false;
     private accelerationMode: AccelerationMode = 'cpu';
     private gpuInitialized: boolean = false;
+    // Scale factor for text/elements when exporting at different resolutions
+    // Design resolution is 1080p (1920x1080), this stores export/design ratio
+    private resolutionScale: number = 1;
 
     // Media caches to avoid reloading for each frame
     private videoCache: Map<string, HTMLVideoElement> = new Map();
@@ -240,6 +244,12 @@ export class ExportEngine {
                 throw new Error('Failed to create canvas context');
             }
 
+            // Calculate resolution scale (design resolution is 1080p)
+            // This ensures text and elements scale properly at different export resolutions
+            const designWidth = 1920; // Design resolution width
+            this.resolutionScale = settings.resolution.width / designWidth;
+            console.log(`%c📐 Resolution scale: ${this.resolutionScale.toFixed(3)} (${settings.resolution.width}/${designWidth})`, 'color: #00aaff');
+
             // Initialize GPU compositor if enabled (with fallback)
             let actuallyUsingGPU = false;
             if (useGPU) {
@@ -264,6 +274,21 @@ export class ExportEngine {
             await this.preloadAllVideos(tracks);
             console.log('%c✅ All videos pre-loaded!', 'color: #00ff00');
 
+            // === AUDIO PROCESSING ===
+            console.log('%c🎵 Processing audio tracks...', 'color: #00aaff');
+            const audioClips = audioMixer.getAudioClips(tracks);
+            let mixedAudio: { audioBuffer: AudioBuffer; sampleRate: number; numberOfChannels: number } | null = null;
+
+            if (audioClips.length > 0) {
+                console.log(`%c   Found ${audioClips.length} audio source(s)`, 'color: #00aaff');
+                mixedAudio = await audioMixer.mixAudio(audioClips, duration, 48000);
+                if (mixedAudio) {
+                    console.log('%c✅ Audio mixed successfully!', 'color: #00ff00');
+                }
+            } else {
+                console.log('%c   No audio tracks found (video will be silent)', 'color: #ffaa00');
+            }
+
             // Calculate frame parameters
             const totalFrames = Math.ceil(duration * settings.fps);
             const frameDurationMicros = Math.floor(1_000_000 / settings.fps);
@@ -271,9 +296,9 @@ export class ExportEngine {
 
             console.log(`%c🎬 Rendering ${totalFrames} frames using H.264/MP4...`, 'font-weight: bold; color: #00ff00');
 
-            // Set up mp4-muxer for H.264 (universal hardware decoding support)
+            // Set up mp4-muxer for H.264 with optional audio
             const muxerTarget = new Mp4ArrayBufferTarget();
-            const muxer = new Mp4Muxer({
+            const muxerConfig: any = {
                 target: muxerTarget,
                 video: {
                     codec: 'avc', // H.264/AVC
@@ -281,7 +306,18 @@ export class ExportEngine {
                     height: settings.resolution.height,
                 },
                 fastStart: 'in-memory', // Enable fast start for streaming
-            });
+            };
+
+            // Add audio configuration if we have mixed audio
+            if (mixedAudio) {
+                muxerConfig.audio = {
+                    codec: 'aac',
+                    sampleRate: mixedAudio.sampleRate,
+                    numberOfChannels: mixedAudio.numberOfChannels,
+                };
+            }
+
+            const muxer = new Mp4Muxer(muxerConfig);
 
             // Set up VideoEncoder with H.264 for smooth VLC playback
             const encoder = new VideoEncoder({
@@ -391,9 +427,83 @@ export class ExportEngine {
             }
 
             // Flush encoder and finalize
-            onProgress({ phase: 'encoding', progress: 95 });
+            onProgress({ phase: 'encoding', progress: 90 });
             await encoder.flush();
             encoder.close();
+
+            // === AUDIO ENCODING ===
+            if (mixedAudio) {
+                console.log('%c🎵 Encoding audio...', 'color: #00aaff');
+                onProgress({ phase: 'encoding', progress: 92 });
+
+                try {
+                    // Create AudioEncoder
+                    const audioEncoder = new AudioEncoder({
+                        output: (chunk, meta) => {
+                            muxer.addAudioChunk(chunk, meta);
+                        },
+                        error: (e) => {
+                            console.error('[AudioEncoder] Error:', e);
+                        },
+                    });
+
+                    // Configure encoder for AAC
+                    audioEncoder.configure({
+                        codec: 'mp4a.40.2', // AAC-LC
+                        sampleRate: mixedAudio.sampleRate,
+                        numberOfChannels: mixedAudio.numberOfChannels,
+                        bitrate: 192000, // 192kbps
+                    });
+
+                    // Convert AudioBuffer to AudioData and encode
+                    const numberOfChannels = mixedAudio.numberOfChannels;
+                    const sampleRate = mixedAudio.sampleRate;
+                    const totalSamples = mixedAudio.audioBuffer.length;
+
+                    // Encode in chunks of ~1024 samples (typical AAC frame size is 1024)
+                    const chunkSize = 1024;
+                    const totalChunks = Math.ceil(totalSamples / chunkSize);
+
+                    for (let i = 0; i < totalChunks; i++) {
+                        const startSample = i * chunkSize;
+                        const endSample = Math.min(startSample + chunkSize, totalSamples);
+                        const samplesInChunk = endSample - startSample;
+
+                        // Create PLANAR Float32Array for this chunk
+                        // For f32-planar: [ch0_sample0, ch0_sample1, ...ch0_sampleN, ch1_sample0, ch1_sample1, ...ch1_sampleN]
+                        const chunkData = new Float32Array(samplesInChunk * numberOfChannels);
+                        for (let c = 0; c < numberOfChannels; c++) {
+                            const channelData = mixedAudio.audioBuffer.getChannelData(c);
+                            const channelOffset = c * samplesInChunk;
+                            for (let s = 0; s < samplesInChunk; s++) {
+                                chunkData[channelOffset + s] = channelData[startSample + s];
+                            }
+                        }
+
+                        // Create AudioData with planar format
+                        const audioData = new AudioData({
+                            format: 'f32-planar',
+                            sampleRate: sampleRate,
+                            numberOfFrames: samplesInChunk,
+                            numberOfChannels: numberOfChannels,
+                            timestamp: Math.floor((startSample / sampleRate) * 1_000_000), // microseconds
+                            data: chunkData,
+                        });
+
+                        audioEncoder.encode(audioData);
+                        audioData.close();
+                    }
+
+                    // Flush and close audio encoder
+                    await audioEncoder.flush();
+                    audioEncoder.close();
+
+                    console.log('%c✅ Audio encoded!', 'color: #00ff00');
+                    onProgress({ phase: 'encoding', progress: 95 });
+                } catch (audioError) {
+                    console.warn('[ExportEngine] Audio encoding failed, video will be silent:', audioError);
+                }
+            }
 
             // Finalize muxer
             muxer.finalize();
@@ -1774,7 +1884,9 @@ export class ExportEngine {
         const { x, y, width, height } = this.calculateItemBounds(item, canvas);
         ctx.save();
 
-        const fontSize = item.fontSize || 40;
+        // Scale fontSize based on export resolution (design is at 1080p)
+        const baseFontSize = item.fontSize || 40;
+        const fontSize = baseFontSize * this.resolutionScale;
         const fontStyle = item.fontStyle || 'normal';
         const fontWeight = item.fontWeight || 'normal';
         const lineHeight = fontSize * 1.4; // Match CSS lineHeight: 1.4
@@ -1865,14 +1977,14 @@ export class ExportEngine {
         const animOpacity = animStyle.opacity ?? 1;
         ctx.globalAlpha = baseOpacity * animOpacity;
 
-        // Get effect properties
+        // Get effect properties (scale by resolution for consistent appearance)
         const effect = item.textEffect;
         const effectType = effect?.type || 'none';
         const effColor = effect?.color || '#000000';
         const intensity = effect?.intensity ?? 50;
         const offset = effect?.offset ?? 50;
-        const dist = (offset / 100) * 20;
-        const blur = (intensity / 100) * 20;
+        const dist = ((offset / 100) * 20) * this.resolutionScale;
+        const blur = ((intensity / 100) * 20) * this.resolutionScale;
 
         // === RENDER TEXT (with multiline and list support) ===
         const lines = text.split('\n');

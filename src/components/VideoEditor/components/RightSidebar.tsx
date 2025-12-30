@@ -4,7 +4,7 @@ import {
     SquarePen, CirclePlay, Eraser, Crop, FlipHorizontal, FlipVertical, Droplets,
     Square, Circle, MessageSquare, Lock, CopyPlus, Trash2, MoreHorizontal,
     Type, PaintBucket, Plus, Check, X, Minus, Bold, Italic, AlignLeft, AlignCenter, AlignRight, Wand2,
-    Palette, Frame, XCircle
+    Palette, Frame, XCircle, Volume2, VolumeX
 } from 'lucide-react';
 import { TimelineItem, BorderStyle } from '@/types';
 
@@ -105,6 +105,21 @@ const RightSidebar: React.FC<RightSidebarProps> = ({
                             <div className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-violet-500 rounded-full border border-[#0e1318]"></div>
                         </div>
                         <span className="text-[10px] font-medium">Edit</span>
+                    </button>
+                )}
+
+                {/* Mute Video Audio Toggle */}
+                {isVideo && (
+                    <button
+                        onClick={() => onUpdate({ muteVideo: !selectedItem.muteVideo })}
+                        className={`flex flex-col items-center justify-center py-3 w-full transition-all relative shrink-0 hover:text-gray-100 hover:bg-[#1f2021] ${selectedItem.muteVideo ? 'text-red-400' : ''}`}
+                    >
+                        {selectedItem.muteVideo ? (
+                            <VolumeX size={20} className="mb-1.5" />
+                        ) : (
+                            <Volume2 size={20} className="mb-1.5" />
+                        )}
+                        <span className="text-[10px] font-medium">{selectedItem.muteVideo ? 'Unmute' : 'Mute'}</span>
                     </button>
                 )}
 
