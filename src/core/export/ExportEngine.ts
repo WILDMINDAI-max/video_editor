@@ -700,9 +700,9 @@ export class ExportEngine {
             let transitionStyle: TransitionStyle = {};
             if (transition && transition.type !== 'none') {
                 transitionStyle = this.calculateTransitionStyle(transition.type, transition.direction || 'left', transitionProgress, role);
-                // Debug: Log transition detection
+                // Debug: Log transition detection with item details
                 if (transitionProgress > 0.01 && transitionProgress < 0.99) {
-                    console.log(`%c🎬 TRANSITION [${transition.type}] role=${role} progress=${transitionProgress.toFixed(2)} opacity=${transitionStyle.opacity?.toFixed(2) ?? 'N/A'}`,
+                    console.log(`%c🎬 TRANSITION [${transition.type}] role=${role} progress=${transitionProgress.toFixed(2)} | item="${item.name}" id=${item.id.slice(0, 8)} offset=${item.offset?.toFixed(3) ?? 'N/A'} start=${item.start.toFixed(3)} dur=${item.duration.toFixed(3)} | clipType=${transitionStyle.clipType || 'none'}`,
                         'color: #ff6600; font-weight: bold');
                 }
             }
@@ -1264,20 +1264,25 @@ export class ExportEngine {
 
         switch (type) {
             // === DISSOLVES ===
+            // Note: Dissolves include subtle scale for split video visibility
             case 'dissolve': {
                 const dissolveEase = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+                const scaleDissolve = 1 + 0.05 * (1 - dissolveEase);
                 return role === 'main'
-                    ? { opacity: dissolveEase, brightness: 0.98 + dissolveEase * 0.02 }
+                    ? { opacity: dissolveEase, brightness: 0.98 + dissolveEase * 0.02, scale: scaleDissolve }
                     : { opacity: 1 - dissolveEase, brightness: 1 - (1 - dissolveEase) * 0.02 };
             }
             case 'film-dissolve': {
                 const filmP = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+                const scaleFilm = 1 + 0.05 * (1 - filmP);
                 return role === 'main'
-                    ? { opacity: filmP }
+                    ? { opacity: filmP, scale: scaleFilm }
                     : { opacity: 1 - filmP };
             }
-            case 'additive-dissolve':
-                return role === 'main' ? { opacity: p } : { opacity: outP };
+            case 'additive-dissolve': {
+                const scaleAdditive = 1 + 0.05 * (1 - p);
+                return role === 'main' ? { opacity: p, scale: scaleAdditive } : { opacity: outP };
+            }
             case 'dip-to-black':
                 if (role === 'outgoing') {
                     return p < 0.5
@@ -1315,23 +1320,31 @@ export class ExportEngine {
                     : { translateX: xMult * -100 * p, translateY: yMult * -100 * p, blur: Math.sin(p * Math.PI) * 5 };
 
             // === IRIS SHAPES ===
+            // Note: Iris transitions now include a subtle scale effect on the incoming clip
+            // This ensures the transition is visible even for split videos with similar frames
             case 'iris-box': {
                 const easeBox = easeOutCubic(p);
                 const insetPercent = 50 * (1 - easeBox);
+                // Scale incoming from 1.08 to 1.0 for a subtle zoom-out effect
+                const scaleBox = 1 + 0.08 * (1 - easeBox);
                 return role === 'main'
-                    ? { clipType: 'inset', clipInset: { top: insetPercent, right: insetPercent, bottom: insetPercent, left: insetPercent }, brightness: 0.7 + 0.3 * p }
+                    ? { clipType: 'inset', clipInset: { top: insetPercent, right: insetPercent, bottom: insetPercent, left: insetPercent }, brightness: 0.7 + 0.3 * p, scale: scaleBox }
                     : { brightness: 1 - p * 0.3 };
             }
             case 'iris-round':
             case 'circle': {
                 const easeCircle = easeOutCubic(p);
+                // Scale incoming from 1.1 to 1.0 for a subtle zoom-out effect
+                const scaleCircle = 1 + 0.1 * (1 - easeCircle);
                 return role === 'main'
-                    ? { clipType: 'circle', clipCircle: { radius: easeCircle * 75, cx: 50, cy: 50 }, brightness: 0.7 + 0.3 * p }
+                    ? { clipType: 'circle', clipCircle: { radius: easeCircle * 75, cx: 50, cy: 50 }, brightness: 0.7 + 0.3 * p, scale: scaleCircle }
                     : { brightness: 1 - p * 0.3 };
             }
             case 'iris-diamond': {
                 const easeDiamond = easeOutCubic(p);
                 const size = 50 * easeDiamond;
+                // Scale incoming from 1.08 to 1.0 for a subtle zoom-out effect
+                const scaleDiamond = 1 + 0.08 * (1 - easeDiamond);
                 return role === 'main'
                     ? {
                         clipType: 'polygon', clipPolygon: [
@@ -1339,7 +1352,7 @@ export class ExportEngine {
                             { x: 50 + size, y: 50 },
                             { x: 50, y: 50 + size },
                             { x: 50 - size, y: 50 }
-                        ], brightness: 0.7 + 0.3 * p
+                        ], brightness: 0.7 + 0.3 * p, scale: scaleDiamond
                     }
                     : { brightness: 1 - p * 0.3 };
             }
@@ -1348,6 +1361,8 @@ export class ExportEngine {
                 const easeCross = easeOutCubic(p);
                 const w = 20 + (80 * easeCross);
                 const halfW = w / 2;
+                // Scale incoming from 1.08 to 1.0 for a subtle zoom-out effect
+                const scaleCross = 1 + 0.08 * (1 - easeCross);
                 return role === 'main'
                     ? {
                         clipType: 'polygon', clipPolygon: [
@@ -1357,29 +1372,32 @@ export class ExportEngine {
                             { x: 50 + halfW, y: 100 }, { x: 50 - halfW, y: 100 },
                             { x: 50 - halfW, y: 50 + halfW }, { x: 0, y: 50 + halfW },
                             { x: 0, y: 50 - halfW }, { x: 50 - halfW, y: 50 - halfW }
-                        ], brightness: 0.7 + 0.3 * p
+                        ], brightness: 0.7 + 0.3 * p, scale: scaleCross
                     }
                     : { brightness: 1 - p * 0.3 };
             }
 
             // === WIPES ===
+            // Note: All wipes now include subtle scale effects for split video compatibility
             case 'wipe': {
                 const easeWipe = easeOutCubic(p);
                 const revealed = easeWipe * 100;
+                const scaleWipe = 1 + 0.06 * (1 - easeWipe);
                 let inset = { top: 0, right: 0, bottom: 0, left: 0 };
                 if (direction === 'left') inset = { top: 0, right: 100 - revealed, bottom: 0, left: 0 };
                 else if (direction === 'right') inset = { top: 0, right: 0, bottom: 0, left: 100 - revealed };
                 else if (direction === 'up') inset = { top: 0, right: 0, bottom: 100 - revealed, left: 0 };
                 else if (direction === 'down') inset = { top: 100 - revealed, right: 0, bottom: 0, left: 0 };
                 return role === 'main'
-                    ? { clipType: 'inset', clipInset: inset, brightness: 0.8 + 0.2 * p }
+                    ? { clipType: 'inset', clipInset: inset, brightness: 0.8 + 0.2 * p, scale: scaleWipe }
                     : { brightness: 1 - p * 0.2 };
             }
             case 'barn-doors': {
                 const easeBarn = easeOutCubic(p);
                 const insetX = 50 * (1 - easeBarn);
+                const scaleBarn = 1 + 0.08 * (1 - easeBarn);
                 return role === 'main'
-                    ? { clipType: 'inset', clipInset: { top: 0, right: insetX, bottom: 0, left: insetX }, brightness: 0.7 + 0.3 * p }
+                    ? { clipType: 'inset', clipInset: { top: 0, right: insetX, bottom: 0, left: insetX }, brightness: 0.7 + 0.3 * p, scale: scaleBarn }
                     : { brightness: 1 - p * 0.3 };
             }
             case 'split': {
@@ -1387,37 +1405,42 @@ export class ExportEngine {
                 const easeS = easeOutCubic(p);
                 const insetH = 50 * (1 - easeS);
                 const insetV = 50 * (1 - easeS);
+                const scaleSplit = 1 + 0.08 * (1 - easeS);
                 return role === 'main'
-                    ? { clipType: 'inset', clipInset: direction === 'up' || direction === 'down' ? { top: insetV, right: 0, bottom: insetV, left: 0 } : { top: 0, right: insetH, bottom: 0, left: insetH } }
+                    ? { clipType: 'inset', clipInset: direction === 'up' || direction === 'down' ? { top: insetV, right: 0, bottom: insetV, left: 0 } : { top: 0, right: insetH, bottom: 0, left: insetH }, scale: scaleSplit }
                     : {};
             }
             case 'clock-wipe':
             case 'radial-wipe': {
                 // Clock wipe - approximated with circle expanding
                 const easeC = easeOutCubic(p);
+                const scaleClock = 1 + 0.1 * (1 - easeC);
                 return role === 'main'
-                    ? { clipType: 'circle', clipCircle: { radius: easeC * 75, cx: 50, cy: 50 } }
-                    : {};
+                    ? { clipType: 'circle', clipCircle: { radius: easeC * 75, cx: 50, cy: 50 }, scale: scaleClock, brightness: 0.7 + 0.3 * p }
+                    : { brightness: 1 - p * 0.3 };
             }
             case 'venetian-blinds': {
                 // Simplified venetian blinds as horizontal wipe
                 const easeV = easeOutCubic(p);
+                const scaleVB = 1 + 0.06 * (1 - easeV);
                 return role === 'main'
-                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeV * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p }
+                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeV * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p, scale: scaleVB }
                     : { brightness: 1 - p * 0.2 };
             }
             case 'checker-wipe': {
-                // Simplified checker as dissolve with opacity
+                // Simplified checker as dissolve with opacity and scale
                 const easeChk = easeOutCubic(p);
+                const scaleChk = 1 + 0.08 * (1 - easeChk);
                 return role === 'main'
-                    ? { opacity: easeChk, brightness: 0.8 + 0.2 * p }
+                    ? { opacity: easeChk, brightness: 0.8 + 0.2 * p, scale: scaleChk }
                     : { opacity: 1 - easeChk * 0.7, brightness: 1 - p * 0.2 };
             }
             case 'zig-zag': {
-                // Simplified zig-zag as diagonal wipe
+                // Simplified zig-zag as diagonal wipe with scale
                 const easeZ = easeOutCubic(p);
+                const scaleZig = 1 + 0.06 * (1 - easeZ);
                 return role === 'main'
-                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeZ * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p }
+                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeZ * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p, scale: scaleZig }
                     : { brightness: 1 - p * 0.2 };
             }
 
@@ -1470,16 +1493,19 @@ export class ExportEngine {
             }
 
             // === SHAPES ===
+            // Note: Shape transitions now include scale effects for split video compatibility
             case 'shape-circle': {
                 const circleEase = easeOutCubic(p);
+                const scaleShapeCircle = 1 + 0.1 * (1 - circleEase);
                 return role === 'main'
-                    ? { clipType: 'circle', clipCircle: { radius: circleEase * 75, cx: 50, cy: 50 } }
-                    : {};
+                    ? { clipType: 'circle', clipCircle: { radius: circleEase * 75, cx: 50, cy: 50 }, scale: scaleShapeCircle, brightness: 0.7 + 0.3 * p }
+                    : { brightness: 1 - p * 0.3 };
             }
             case 'shape-heart':
             case 'heart': {
                 const heartEase = easeOutCubic(p);
                 const heartSize = heartEase * 50;
+                const scaleHeart = 1 + 0.1 * (1 - heartEase);
                 return role === 'main'
                     ? {
                         clipType: 'polygon', clipPolygon: [
@@ -1487,23 +1513,24 @@ export class ExportEngine {
                             { x: 50 - heartSize, y: 50 - heartSize * 0.4 },
                             { x: 50, y: 50 - heartSize },
                             { x: 50 + heartSize, y: 50 - heartSize * 0.4 }
-                        ]
+                        ], scale: scaleHeart, brightness: 0.7 + 0.3 * p
                     }
-                    : {};
+                    : { brightness: 1 - p * 0.3 };
             }
             case 'shape-triangle':
             case 'triangle': {
                 const triEase = easeOutCubic(p);
                 const triSize = triEase * 50;
+                const scaleTri = 1 + 0.1 * (1 - triEase);
                 return role === 'main'
                     ? {
                         clipType: 'polygon', clipPolygon: [
                             { x: 50, y: 50 - triSize },
                             { x: 50 + triSize, y: 50 + triSize },
                             { x: 50 - triSize, y: 50 + triSize }
-                        ]
+                        ], scale: scaleTri, brightness: 0.7 + 0.3 * p
                     }
-                    : {};
+                    : { brightness: 1 - p * 0.3 };
             }
             case 'mosaic-grid': {
                 const mosaicEase = easeOutCubic(p);
@@ -1513,27 +1540,31 @@ export class ExportEngine {
             }
 
             // === FLASH ===
-            case 'flash':
+            // Note: Flash now includes a scale pulse for split video visibility
+            case 'flash': {
+                const scaleFlash = 1 + Math.sin(p * Math.PI) * 0.1;
                 return role === 'outgoing'
-                    ? { opacity: p < 0.5 ? 1 : 0 }
-                    : { opacity: p >= 0.5 ? 1 : 0 };
-
+                    ? { opacity: p < 0.5 ? 1 : 0, scale: scaleFlash }
+                    : { opacity: p >= 0.5 ? 1 : 0, scale: scaleFlash };
+            }
             // === BLUR ===
             case 'blur':
-            case 'zoom-blur':
+            case 'zoom-blur': {
+                const scaleBlur = 1 + Math.sin(p * Math.PI) * 0.1;
                 return role === 'outgoing'
-                    ? { blur: p * 20, opacity: outP }
-                    : { blur: outP * 20, opacity: p };
-
+                    ? { blur: p * 20, opacity: outP, scale: 1 + p * 0.1 }
+                    : { blur: outP * 20, opacity: p, scale: 1 + outP * 0.1 };
+            }
             // === GLITCH ===
             case 'glitch': {
                 // Match Canvas.tsx: hue-rotate, contrast, random offset, hard cut
                 const glitchIntensity = Math.sin(p * Math.PI);
                 const glitchOffset = Math.sin(p * 50) * 10 * glitchIntensity;
+                const scaleGlitch = 1 + (Math.random() * 0.1 - 0.05) * glitchIntensity;
                 if (role === 'outgoing') {
-                    return p > 0.5 ? { opacity: 0 } : { translateX: -glitchOffset, translateY: glitchOffset, hueRotate: p * 90, contrast: 1.5, opacity: 1 };
+                    return p > 0.5 ? { opacity: 0 } : { translateX: -glitchOffset, translateY: glitchOffset, hueRotate: p * 90, contrast: 1.5, opacity: 1, scale: scaleGlitch };
                 }
-                return p > 0.5 ? { translateX: glitchOffset, translateY: -glitchOffset, hueRotate: p * 90, contrast: 1.5, opacity: 1 } : { opacity: 0 };
+                return p > 0.5 ? { translateX: glitchOffset, translateY: -glitchOffset, hueRotate: p * 90, contrast: 1.5, opacity: 1, scale: scaleGlitch } : { opacity: 0 };
             }
 
             // === STACK ===
@@ -1556,10 +1587,12 @@ export class ExportEngine {
                     : { opacity: outP, scale: 1 + 0.05 * outP };
 
             // === PAGE ===
-            case 'page-peel':
+            case 'page-peel': {
+                const peelScale = 1 + 0.05 * (1 - p);
                 return role === 'main'
-                    ? { rotate: (1 - p) * -5, opacity: p }
+                    ? { rotate: (1 - p) * -5, opacity: p, scale: peelScale }
                     : { brightness: 1 - p * 0.2 };
+            }
 
             // === FILM & LIGHT EFFECTS ===
             case 'film-burn': {
@@ -1573,14 +1606,17 @@ export class ExportEngine {
                     opacity: role === 'main' ? p : outP
                 };
             }
-            case 'light-leak':
+            case 'light-leak': {
+                const leakScale = 1 + 0.05 * (1 - p);
                 return role === 'main'
-                    ? { sepia: 1 - p, brightness: 1 + (1 - p), opacity: p }
+                    ? { sepia: 1 - p, brightness: 1 + (1 - p), opacity: p, scale: leakScale }
                     : { sepia: p, brightness: 1 + p, opacity: outP };
+            }
             case 'luma-dissolve': {
                 const lumaP = 1 - Math.pow(1 - p, 2);
+                const lumaScale = 1 + 0.05 * (1 - lumaP);
                 return role === 'main'
-                    ? { brightness: 0.7 + lumaP * 0.3, opacity: lumaP }
+                    ? { brightness: 0.7 + lumaP * 0.3, opacity: lumaP, scale: lumaScale }
                     : { brightness: 1 - lumaP * 0.3, opacity: 1 - lumaP };
             }
 
@@ -1594,16 +1630,20 @@ export class ExportEngine {
                     opacity: role === 'main' ? p : outP
                 };
             }
-            case 'pixelate':
-                return role === 'main' ? { opacity: p } : { opacity: outP };
+            case 'pixelate': {
+                const pixelScale = 1 + 0.05 * Math.sin(p * Math.PI);
+                return role === 'main' ? { opacity: p, scale: pixelScale } : { opacity: outP };
+            }
             case 'datamosh': {
                 return {
                     scale: 1 + Math.sin(p * 8) * 0.08,
                     opacity: role === 'main' ? p : outP
                 };
             }
-            case 'chromatic-aberration':
-                return { opacity: role === 'main' ? p : outP };
+            case 'chromatic-aberration': {
+                const chromScale = 1 + 0.05 * Math.sin(p * Math.PI);
+                return { opacity: role === 'main' ? p : outP, scale: chromScale };
+            }
 
             // === DISTORTION ===
             case 'ripple':
@@ -2711,25 +2751,37 @@ export class ExportEngine {
                 newImg.src = item.src;
             });
         } else if (item.type === 'video') {
+            // Use composite cache key: item.id + offset
+            // This ensures split videos (same id, different offset) get separate video elements
+            const offset = item.offset ?? 0;
+            const cacheKey = `${item.id}_${offset.toFixed(3)}`;
+
             // Get or create video element from cache
-            let video = this.videoCache.get(item.id);
+            let video = this.videoCache.get(cacheKey);
 
             if (video === undefined) {
                 const newVideo = await this.createVideoElement(item);
                 if (!newVideo) return null;
                 video = newVideo;
-                this.videoCache.set(item.id, video);
+                this.videoCache.set(cacheKey, video);
             }
 
             // Calculate the correct time position in the source video
             // Formula: timeInSourceVideo = offset + (currentTimelineTime - clipStartTime) * speed
             const speed = item.speed ?? 1;
-            const offset = item.offset ?? 0;
-            const timeInClip = (currentTime - item.start) * speed;
+            // offset already defined above for cache key
+            // Clamp timeInClip to the clip's valid duration range
+            // This is critical for transitions where currentTime may exceed clip boundaries
+            // (e.g., outgoing clip during a transition should show its last frame)
+            const rawTimeInClip = (currentTime - item.start) * speed;
+            const timeInClip = Math.max(0, Math.min(rawTimeInClip, item.duration * speed));
             const timeInSourceVideo = offset + timeInClip;
 
             // Clamp to valid video duration
             const clampedTime = Math.max(0, Math.min(timeInSourceVideo, video.duration - 0.01));
+
+            // Debug logging for split video transitions
+            console.log(`%c[ExportEngine] loadMediaElement: "${item.name}" id=${item.id.slice(0, 8)} | currentTime=${currentTime.toFixed(3)} | item.start=${item.start.toFixed(3)} | offset=${offset.toFixed(3)} | rawTimeInClip=${rawTimeInClip.toFixed(3)} | timeInClip=${timeInClip.toFixed(3)} | timeInSource=${timeInSourceVideo.toFixed(3)} | clampedTime=${clampedTime.toFixed(3)}`, 'color: #00aaff');
 
             // Seek to the correct time and wait for frame to be ready
             if (Math.abs(video.currentTime - clampedTime) > 0.01) {
