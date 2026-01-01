@@ -39,8 +39,16 @@ interface TransitionStyle {
     clipInset?: { top: number; right: number; bottom: number; left: number }; // percentages
     clipCircle?: { radius: number; cx: number; cy: number }; // radius as %, cx/cy as %
     clipPolygon?: Array<{ x: number; y: number }>; // array of points as %
+    // Multi-region clip for venetian blinds, checker patterns (all values as %)
+    multiClip?: Array<{ x: number; y: number; w: number; h: number }>;
     // Blend mode
     blendMode?: GlobalCompositeOperation;
+    // Mask properties for complex transitions (clock-wipe, venetian-blinds, checker, zig-zag)
+    maskType?: 'none' | 'conic' | 'linear-repeat' | 'checker';
+    maskAngle?: number;     // degrees for conic start, rotation for linear
+    maskProgress?: number;  // 0-1 progress for mask reveal
+    maskSize?: number;      // percentage for repeat size (venetian/zig-zag)
+    maskDirection?: string; // direction for orientation
 }
 
 // Internal type for rendering items with transition info
@@ -1006,13 +1014,33 @@ export class ExportEngine {
         // Apply animation style for images/videos (Phase 2)
         const animStyle = this.calculateAnimationStyle(item, currentTime);
 
-        ctx.save();
+        // Check if we need mask-based rendering (for complex transitions like clock-wipe, venetian, checker, zig-zag)
+        const needsMaskRendering = transitionStyle.maskType && transitionStyle.maskType !== 'none';
 
-        // Apply transition opacity
+        // If mask transition, render to offscreen canvas first
+        let renderCtx = ctx;
+        let offscreenCanvas: HTMLCanvasElement | null = null;
+
+        if (needsMaskRendering) {
+            // Create offscreen canvas the same size as the target item (with some padding for transforms)
+            offscreenCanvas = document.createElement('canvas');
+            offscreenCanvas.width = Math.ceil(width * 1.5);  // Extra space for transforms
+            offscreenCanvas.height = Math.ceil(height * 1.5);
+            const offCtx = offscreenCanvas.getContext('2d');
+            if (offCtx) {
+                renderCtx = offCtx;
+                // Translate to center of offscreen canvas
+                renderCtx.translate(offscreenCanvas.width / 2, offscreenCanvas.height / 2);
+            }
+        }
+
+        renderCtx.save();
+
+        // Apply transition opacity (skip for mask transitions - handled later)
         const baseOpacity = (item.opacity ?? 100) / 100;
-        const transitionOpacity = transitionStyle.opacity ?? 1;
+        const transitionOpacity = needsMaskRendering ? 1 : (transitionStyle.opacity ?? 1);
         const animOpacity = animStyle.opacity ?? 1;
-        ctx.globalAlpha = baseOpacity * transitionOpacity * animOpacity;
+        renderCtx.globalAlpha = baseOpacity * transitionOpacity * animOpacity;
 
         // Calculate combined transforms
         let scaleX = 1, scaleY = 1;
@@ -1051,10 +1079,12 @@ export class ExportEngine {
         if (animStyle.translateY !== undefined) translateY += animStyle.translateY;
         if (animStyle.rotate !== undefined) rotation += animStyle.rotate;
 
-        // Apply combined transforms
-        ctx.translate(x + width / 2 + translateX, y + height / 2 + translateY);
-        if (rotation) ctx.rotate((rotation * Math.PI) / 180);
-        if (scaleX !== 1 || scaleY !== 1) ctx.scale(scaleX, scaleY);
+        // Apply combined transforms (for offscreen, start from center; for main, use position)
+        if (!needsMaskRendering) {
+            renderCtx.translate(x + width / 2 + translateX, y + height / 2 + translateY);
+        }
+        if (rotation) renderCtx.rotate((rotation * Math.PI) / 180);
+        if (scaleX !== 1 || scaleY !== 1) renderCtx.scale(scaleX, scaleY);
 
         // Build filter string
         const filters: string[] = [];
@@ -1128,17 +1158,17 @@ export class ExportEngine {
         }
 
         if (filters.length > 0) {
-            ctx.filter = filters.join(' ');
+            renderCtx.filter = filters.join(' ');
         }
 
-        // Apply blend mode if specified
-        if (transitionStyle.blendMode) {
-            ctx.globalCompositeOperation = transitionStyle.blendMode;
+        // Apply blend mode if specified (skip for mask rendering)
+        if (!needsMaskRendering && transitionStyle.blendMode) {
+            renderCtx.globalCompositeOperation = transitionStyle.blendMode;
         }
 
-        // Apply clip path for shape/wipe transitions
-        if (transitionStyle.clipType && transitionStyle.clipType !== 'none') {
-            ctx.beginPath();
+        // Apply clip path for shape/wipe transitions (skip for mask-based transitions)
+        if (!needsMaskRendering && transitionStyle.clipType && transitionStyle.clipType !== 'none') {
+            renderCtx.beginPath();
 
             if (transitionStyle.clipType === 'inset' && transitionStyle.clipInset) {
                 // Inset clip: top, right, bottom, left as percentages
@@ -1146,7 +1176,7 @@ export class ExportEngine {
                 const clipRight = (transitionStyle.clipInset.right / 100) * width;
                 const clipBottom = (transitionStyle.clipInset.bottom / 100) * height;
                 const clipLeft = (transitionStyle.clipInset.left / 100) * width;
-                ctx.rect(
+                renderCtx.rect(
                     -width / 2 + clipLeft,
                     -height / 2 + clipTop,
                     width - clipLeft - clipRight,
@@ -1157,27 +1187,46 @@ export class ExportEngine {
                 const radius = (transitionStyle.clipCircle.radius / 100) * Math.max(width, height);
                 const cx = (transitionStyle.clipCircle.cx - 50) / 100 * width;
                 const cy = (transitionStyle.clipCircle.cy - 50) / 100 * height;
-                ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                renderCtx.arc(cx, cy, radius, 0, Math.PI * 2);
             } else if (transitionStyle.clipType === 'polygon' && transitionStyle.clipPolygon) {
                 // Polygon clip: array of points as percentages
                 const points = transitionStyle.clipPolygon;
                 if (points.length > 0) {
                     const firstPoint = points[0];
-                    ctx.moveTo(
+                    renderCtx.moveTo(
                         (firstPoint.x - 50) / 100 * width,
                         (firstPoint.y - 50) / 100 * height
                     );
                     for (let i = 1; i < points.length; i++) {
-                        ctx.lineTo(
+                        renderCtx.lineTo(
                             (points[i].x - 50) / 100 * width,
                             (points[i].y - 50) / 100 * height
                         );
                     }
-                    ctx.closePath();
+                    renderCtx.closePath();
                 }
             }
 
-            ctx.clip();
+            renderCtx.clip();
+        }
+
+        // Apply multi-region clip for venetian blinds, checker, zig-zag patterns
+        if (!needsMaskRendering && transitionStyle.multiClip && transitionStyle.multiClip.length > 0) {
+            renderCtx.beginPath();
+
+            for (const region of transitionStyle.multiClip) {
+                // Convert percentages to pixels, relative to centered media
+                // x, y are percentages (0-100) of media dimensions
+                // w, h are percentages of media dimensions
+                const rx = -width / 2 + (region.x / 100) * width;
+                const ry = -height / 2 + (region.y / 100) * height;
+                const rw = (region.w / 100) * width;
+                const rh = (region.h / 100) * height;
+
+                renderCtx.rect(rx, ry, rw, rh);
+            }
+
+            renderCtx.clip();
         }
 
         // Draw media with crop support
@@ -1210,7 +1259,7 @@ export class ExportEngine {
             const srcY = (crop.y / 100) * maxOffsetY;
 
             // Draw with 9-argument form: (img, sx, sy, sw, sh, dx, dy, dw, dh)
-            ctx.drawImage(
+            renderCtx.drawImage(
                 mediaEl,
                 srcX, srcY, visibleWidth, visibleHeight,  // Source region (cropped)
                 -width / 2, -height / 2, width, height    // Destination
@@ -1218,26 +1267,46 @@ export class ExportEngine {
 
             // Apply background color overlay (tint)
             if (item.backgroundColor) {
-                ctx.save();
-                ctx.globalCompositeOperation = 'multiply';
-                ctx.globalAlpha = 0.5;
-                ctx.fillStyle = item.backgroundColor;
-                ctx.fillRect(-width / 2, -height / 2, width, height);
-                ctx.restore();
+                renderCtx.save();
+                renderCtx.globalCompositeOperation = 'multiply';
+                renderCtx.globalAlpha = 0.5;
+                renderCtx.fillStyle = item.backgroundColor;
+                renderCtx.fillRect(-width / 2, -height / 2, width, height);
+                renderCtx.restore();
             }
 
             // Draw border if defined (after image)
             if (item.border && item.border.width > 0 && !item.isBackground) {
-                ctx.strokeStyle = item.border.color || '#000000';
-                ctx.lineWidth = item.border.width;
+                renderCtx.strokeStyle = item.border.color || '#000000';
+                renderCtx.lineWidth = item.border.width;
                 // Draw border around the item
-                ctx.strokeRect(-width / 2, -height / 2, width, height);
+                renderCtx.strokeRect(-width / 2, -height / 2, width, height);
             }
         } catch (error) {
             console.warn(`[ExportEngine] Failed to draw media: ${item.name || item.src}`, error);
         }
 
-        ctx.restore();
+        renderCtx.restore();
+
+        // If we used offscreen rendering, apply mask and draw to main canvas
+        if (needsMaskRendering && offscreenCanvas) {
+            // Apply the transition mask
+            const maskedCanvas = this.applyTransitionMask(offscreenCanvas, transitionStyle, width, height);
+
+            // Draw the masked result to the main canvas at the correct position
+            ctx.save();
+            ctx.globalAlpha = baseOpacity * (transitionStyle.opacity ?? 1) * animOpacity;
+
+            // Draw centered at the item position
+            const offsetX = (offscreenCanvas.width - width) / 2;
+            const offsetY = (offscreenCanvas.height - height) / 2;
+            ctx.drawImage(
+                maskedCanvas,
+                x - offsetX + translateX,
+                y - offsetY + translateY
+            );
+            ctx.restore();
+        }
     }
 
     /**
@@ -1412,36 +1481,126 @@ export class ExportEngine {
             }
             case 'clock-wipe':
             case 'radial-wipe': {
-                // Clock wipe - approximated with circle expanding
+                // Clock wipe - radial sweep using conic mask (matches CSS conic-gradient)
                 const easeC = easeOutCubic(p);
-                const scaleClock = 1 + 0.1 * (1 - easeC);
                 return role === 'main'
-                    ? { clipType: 'circle', clipCircle: { radius: easeC * 75, cx: 50, cy: 50 }, scale: scaleClock, brightness: 0.7 + 0.3 * p }
+                    ? { maskType: 'conic', maskAngle: -90, maskProgress: easeC, brightness: 0.7 + 0.3 * p }
                     : { brightness: 1 - p * 0.3 };
             }
             case 'venetian-blinds': {
-                // Simplified venetian blinds as horizontal wipe
+                // Venetian blinds - repeating horizontal/vertical stripes revealing progressively
                 const easeV = easeOutCubic(p);
-                const scaleVB = 1 + 0.06 * (1 - easeV);
-                return role === 'main'
-                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeV * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p, scale: scaleVB }
-                    : { brightness: 1 - p * 0.2 };
+                const isVertical = direction === 'up' || direction === 'down';
+
+                if (role === 'main') {
+                    // Create multi-clip stripe pattern - 12 stripes like CSS mask-size: 8%
+                    const numStripes = 12;
+                    const clipRegions: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+                    if (isVertical) {
+                        // Horizontal stripes revealing downward
+                        const stripeHeight = 100 / numStripes;
+                        for (let i = 0; i < numStripes; i++) {
+                            const y = i * stripeHeight;
+                            const revealH = stripeHeight * easeV;
+                            if (revealH > 0.1) { // Skip tiny regions
+                                clipRegions.push({ x: 0, y: y, w: 100, h: revealH });
+                            }
+                        }
+                    } else {
+                        // Vertical stripes revealing rightward
+                        const stripeWidth = 100 / numStripes;
+                        for (let i = 0; i < numStripes; i++) {
+                            const x = i * stripeWidth;
+                            const revealW = stripeWidth * easeV;
+                            if (revealW > 0.1) { // Skip tiny regions
+                                clipRegions.push({ x: x, y: 0, w: revealW, h: 100 });
+                            }
+                        }
+                    }
+
+                    return {
+                        multiClip: clipRegions.length > 0 ? clipRegions : undefined,
+                        brightness: 0.8 + 0.2 * p
+                    };
+                }
+                return { brightness: 1 - p * 0.2 };
             }
             case 'checker-wipe': {
-                // Simplified checker as dissolve with opacity and scale
+                // Checker wipe - checkerboard pattern where alternating tiles reveal
                 const easeChk = easeOutCubic(p);
-                const scaleChk = 1 + 0.08 * (1 - easeChk);
-                return role === 'main'
-                    ? { opacity: easeChk, brightness: 0.8 + 0.2 * p, scale: scaleChk }
-                    : { opacity: 1 - easeChk * 0.7, brightness: 1 - p * 0.2 };
+
+                if (role === 'main') {
+                    // Create checkerboard clip regions - 8x6 grid (48 tiles, 24 visible)
+                    const numCols = 8;
+                    const numRows = 6;
+                    const tileW = 100 / numCols;
+                    const tileH = 100 / numRows;
+                    const clipRegions: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+                    for (let i = 0; i < numCols; i++) {
+                        for (let j = 0; j < numRows; j++) {
+                            // Only include alternating tiles (checkerboard pattern)
+                            if ((i + j) % 2 === 0) {
+                                const x = i * tileW;
+                                const y = j * tileH;
+                                // Tiles grow from center inward based on progress
+                                const size = easeChk;
+                                const actualW = tileW * size;
+                                const actualH = tileH * size;
+                                const offsetX = (tileW - actualW) / 2;
+                                const offsetY = (tileH - actualH) / 2;
+                                if (actualW > 0.5 && actualH > 0.5) { // Skip tiny regions
+                                    clipRegions.push({
+                                        x: x + offsetX,
+                                        y: y + offsetY,
+                                        w: actualW,
+                                        h: actualH
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    return {
+                        multiClip: clipRegions.length > 0 ? clipRegions : undefined,
+                        opacity: 0.3 + 0.7 * easeChk, // Also fade in
+                        brightness: 0.8 + 0.2 * p
+                    };
+                }
+                return { opacity: 1 - easeChk * 0.7, brightness: 1 - p * 0.2 };
             }
             case 'zig-zag': {
-                // Simplified zig-zag as diagonal wipe with scale
+                // Zig-zag wipe - diagonal stripes at 135° (top-left to bottom-right)
+                // CSS uses: linear-gradient(135deg, black xp%, transparent xp%) with mask-size: 12%
                 const easeZ = easeOutCubic(p);
-                const scaleZig = 1 + 0.06 * (1 - easeZ);
-                return role === 'main'
-                    ? { clipType: 'inset', clipInset: { top: 0, right: 100 - easeZ * 100, bottom: 0, left: 0 }, brightness: 0.8 + 0.2 * p, scale: scaleZig }
-                    : { brightness: 1 - p * 0.2 };
+
+                if (role === 'main') {
+                    // Create diagonal stripe pattern - 8 stripes (like 12% mask-size)
+                    // Each stripe runs diagonally from top-right to bottom-left
+                    // and reveals from top-left edge based on progress
+                    const numStripes = 8;
+                    const stripeWidth = 100 / numStripes; // percentage of width
+                    const clipRegions: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+                    // For each stripe, the reveal goes from left edge of stripe to right
+                    // At 135°, we need stripes that go diagonally
+                    // Approximate with vertical stripes that reveal from left
+                    for (let i = 0; i < numStripes; i++) {
+                        const x = i * stripeWidth;
+                        // Each stripe reveals from its left edge
+                        const revealW = stripeWidth * easeZ;
+                        if (revealW > 0.1) {
+                            clipRegions.push({ x: x, y: 0, w: revealW, h: 100 });
+                        }
+                    }
+
+                    return {
+                        multiClip: clipRegions.length > 0 ? clipRegions : undefined,
+                        brightness: 0.8 + 0.2 * p
+                    };
+                }
+                return { brightness: 1 - p * 0.2 };
             }
 
             // === ZOOMS ===
@@ -1783,6 +1942,180 @@ export class ExportEngine {
             default:
                 return '';
         }
+    }
+
+    /**
+     * Apply transition mask to an offscreen canvas using Canvas 2D compositing
+     * Replicates CSS mask-image behavior for complex transitions like:
+     * - clock-wipe (conic gradient)
+     * - venetian-blinds (repeating linear gradient)
+     * - checker-wipe (checkerboard pattern)
+     * - zig-zag (diagonal stripe pattern)
+     * 
+     * @param sourceCanvas - The canvas containing the rendered media
+     * @param style - Transition style with mask properties
+     * @param itemWidth - Actual width of the media item
+     * @param itemHeight - Actual height of the media item
+     * @returns A new canvas with the mask applied, or the source if no mask needed
+     */
+    private applyTransitionMask(
+        sourceCanvas: HTMLCanvasElement,
+        style: TransitionStyle,
+        itemWidth: number,
+        itemHeight: number
+    ): HTMLCanvasElement {
+        if (!style.maskType || style.maskType === 'none') {
+            return sourceCanvas;
+        }
+
+        const canvasWidth = sourceCanvas.width;
+        const canvasHeight = sourceCanvas.height;
+        const p = style.maskProgress ?? 0;
+
+        // The media is centered in the canvas, calculate offsets
+        const offsetX = (canvasWidth - itemWidth) / 2;
+        const offsetY = (canvasHeight - itemHeight) / 2;
+
+        // Create output canvas (same size as source)
+        const outputCanvas = document.createElement('canvas');
+        outputCanvas.width = canvasWidth;
+        outputCanvas.height = canvasHeight;
+        const outCtx = outputCanvas.getContext('2d');
+        if (!outCtx) return sourceCanvas;
+
+        // Draw the source to output
+        outCtx.drawImage(sourceCanvas, 0, 0);
+
+        // Apply mask using destination-in composite operation
+        outCtx.globalCompositeOperation = 'destination-in';
+
+        switch (style.maskType) {
+            case 'conic': {
+                // Clock wipe effect - radial sweep from top center
+                // Matches CSS: conic-gradient(from 0deg at 50% 50%, black ${p * 360}deg, transparent ${p * 360}deg)
+                const centerX = canvasWidth / 2;
+                const centerY = canvasHeight / 2;
+                const startAngle = (style.maskAngle ?? -90) * Math.PI / 180; // Start from top (-90 deg)
+                const sweepAngle = p * Math.PI * 2;
+                const endAngle = startAngle + sweepAngle;
+                const radius = Math.max(canvasWidth, canvasHeight) * 1.5; // Ensure it covers the entire canvas
+
+                outCtx.beginPath();
+                outCtx.moveTo(centerX, centerY);
+                outCtx.arc(centerX, centerY, radius, startAngle, endAngle);
+                outCtx.closePath();
+                outCtx.fillStyle = '#000000';
+                outCtx.fill();
+                break;
+            }
+
+            case 'linear-repeat': {
+                // Repeating stripe pattern (venetian blinds / zig-zag)
+                // CSS: linear-gradient(direction, black ${p*100}%, transparent ${p*100}%)
+                // with mask-size creating repeated stripes
+                // Each stripe reveals from one edge to the other based on progress
+
+                const direction = style.maskDirection || 'left';
+                const isVertical = direction === 'up' || direction === 'down';
+                const stripeSizePercent = style.maskSize ?? 8;
+
+                // For horizontal stripes (venetian default): stripes are 8% of height
+                // For vertical stripes: stripes are 8% of width
+                // For zig-zag (135deg): stripes are 12% of height at an angle
+
+                const isZigZag = Math.abs(style.maskAngle ?? 90) === 135;
+
+                if (isZigZag) {
+                    // Zig-zag: diagonal stripes at 135 degrees
+                    // Each stripe reveals from top-left to bottom-right
+                    const stripeWidth = (stripeSizePercent / 100) * itemHeight;
+                    const diagLength = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
+                    const numStripes = Math.ceil(diagLength / stripeWidth) * 2 + 4;
+
+                    outCtx.save();
+                    outCtx.translate(canvasWidth / 2, canvasHeight / 2);
+                    outCtx.rotate(45 * Math.PI / 180); // 135deg from horizontal = 45deg rotation
+
+                    for (let i = -numStripes; i <= numStripes; i++) {
+                        const stripeY = i * stripeWidth;
+                        // Each stripe reveals based on progress - from one edge
+                        const revealWidth = stripeWidth * p;
+                        outCtx.fillStyle = '#000000';
+                        outCtx.fillRect(-diagLength, stripeY, diagLength * 2, revealWidth);
+                    }
+
+                    outCtx.restore();
+                } else {
+                    // Venetian blinds: horizontal or vertical stripes
+                    // The stripes should cover the content area (offset by offsetX, offsetY)
+                    if (isVertical) {
+                        // Horizontal stripes (for up/down direction)
+                        const stripeHeight = (stripeSizePercent / 100) * itemHeight;
+                        const numStripes = Math.ceil(itemHeight / stripeHeight) + 1;
+
+                        for (let i = 0; i <= numStripes; i++) {
+                            const stripeY = offsetY + i * stripeHeight;
+                            // Each stripe reveals from top to bottom based on progress
+                            const revealHeight = stripeHeight * p;
+                            outCtx.fillStyle = '#000000';
+                            outCtx.fillRect(offsetX, stripeY, itemWidth, revealHeight);
+                        }
+                    } else {
+                        // Vertical stripes (for left/right direction)
+                        const stripeWidth = (stripeSizePercent / 100) * itemWidth;
+                        const numStripes = Math.ceil(itemWidth / stripeWidth) + 1;
+
+                        for (let i = 0; i <= numStripes; i++) {
+                            const stripeX = offsetX + i * stripeWidth;
+                            // Each stripe reveals from left to right based on progress
+                            const revealWidth = stripeWidth * p;
+                            outCtx.fillStyle = '#000000';
+                            outCtx.fillRect(stripeX, offsetY, revealWidth, itemHeight);
+                        }
+                    }
+                }
+                break;
+            }
+
+            case 'checker': {
+                // Checkerboard pattern reveal
+                // CSS uses conic-gradient for checkered pattern with shrinking mask-size
+                // The effect: tiles are visible/hidden in alternating pattern, 
+                // and opacity transitions with progress
+
+                // For Canvas 2D: Draw a full checkerboard mask where the "black" tiles are visible
+                // centered over the actual content area
+
+                const baseTileSize = Math.min(itemWidth, itemHeight) * 0.05; // 5% of smaller dimension
+                const tileSizeMultiplier = 2.4 - p * 0.4; // CSS: 200% * (1.2 - p*0.2) 
+                const tileSize = baseTileSize * tileSizeMultiplier;
+
+                const numTilesX = Math.ceil(itemWidth / tileSize) + 2;
+                const numTilesY = Math.ceil(itemHeight / tileSize) + 2;
+
+                // Start drawing from offset position, slightly before to ensure coverage
+                const startX = offsetX - tileSize;
+                const startY = offsetY - tileSize;
+
+                for (let i = 0; i < numTilesX; i++) {
+                    for (let j = 0; j < numTilesY; j++) {
+                        // Checkerboard pattern - only draw alternating tiles
+                        if ((i + j) % 2 === 0) {
+                            const x = startX + i * tileSize;
+                            const y = startY + j * tileSize;
+                            outCtx.fillStyle = '#000000';
+                            outCtx.fillRect(x, y, tileSize, tileSize);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        // Reset composite operation
+        outCtx.globalCompositeOperation = 'source-over';
+
+        return outputCanvas;
     }
 
     /**
