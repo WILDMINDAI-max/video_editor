@@ -266,6 +266,7 @@ export class ExportEngine {
                     if (gpuInitSuccess) {
                         gpuCompositor.setResolution(settings.resolution.width, settings.resolution.height);
                         actuallyUsingGPU = true;
+                        this.gpuInitialized = true;
                         console.log('%c✨ GPU Compositor initialized for export', 'color: #00ff00');
                     }
                 } catch (error) {
@@ -398,6 +399,14 @@ export class ExportEngine {
                 encoder.encode(frame, { keyFrame: isKeyframe });
                 frame.close();
 
+                // Back-pressure: wait if encoder queue is getting too full
+                // This prevents the encoder from being overwhelmed and ensures frames are actually encoded
+                const maxQueueSize = 10; // Keep queue small to ensure frames are processed
+                while (encoder.encodeQueueSize > maxQueueSize) {
+                    // Wait a bit for the encoder to catch up
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+
                 // Periodic memory management - more aggressive for 4K
                 if ((frameIndex + 1) % cacheCleanupInterval === 0) {
                     this.clearCaches();
@@ -434,10 +443,36 @@ export class ExportEngine {
                 throw new Error('Export cancelled by user');
             }
 
-            // Flush encoder and finalize
+            // Flush encoder and finalize with timeout to prevent hanging
+            console.log('%c🎬 Flushing video encoder...', 'color: #00aaff');
+            console.log(`   Encoder state: ${encoder.state}, Queue size: ${encoder.encodeQueueSize}`);
             onProgress({ phase: 'encoding', progress: 90 });
-            await encoder.flush();
-            encoder.close();
+
+            // Only flush if encoder is in configured state and has pending frames
+            if (encoder.state === 'configured') {
+                // Add timeout to encoder.flush() to prevent indefinite hanging
+                const flushTimeout = 30000; // 30 seconds timeout (back-pressure keeps queue small, so this should be quick)
+                try {
+                    await Promise.race([
+                        encoder.flush(),
+                        new Promise<void>((_, reject) =>
+                            setTimeout(() => reject(new Error('Encoder flush timeout - proceeding with available frames')), flushTimeout)
+                        )
+                    ]);
+                    console.log('%c✅ Video encoder flushed', 'color: #00ff00');
+                } catch (flushError) {
+                    console.warn('%c⚠️ Encoder flush issue:', 'color: #ff6600', flushError);
+                    console.log('%c⏭️ Proceeding with export...', 'color: #ffaa00');
+                }
+            } else {
+                console.warn(`%c⚠️ Encoder not in configured state (${encoder.state}), skipping flush`, 'color: #ff6600');
+            }
+
+            try {
+                encoder.close();
+            } catch (closeError) {
+                console.warn('[ExportEngine] Error closing encoder:', closeError);
+            }
 
             // === AUDIO ENCODING ===
             if (mixedAudio) {
@@ -514,7 +549,13 @@ export class ExportEngine {
             }
 
             // Finalize muxer
+            console.log('%c📦 Finalizing video file...', 'color: #00aaff');
+            onProgress({ phase: 'encoding', progress: 97 });
+
             muxer.finalize();
+            console.log('%c✅ Muxer finalized', 'color: #00ff00');
+            onProgress({ phase: 'encoding', progress: 99 });
+
             const buffer = muxerTarget.buffer;
             const blob = new Blob([buffer], { type: 'video/mp4' });
 
@@ -807,7 +848,10 @@ export class ExportEngine {
                 if (timeIntoClip >= transStart && timeIntoClip <= transStart + t.duration) {
                     isTransitioning = true;
                     transition = t;
-                    progress = (timeIntoClip - transStart) / t.duration;
+                    // Apply speed modifier: speed > 1 = faster animation, speed < 1 = slower
+                    const transSpeed = t.speed ?? 1.0;
+                    const rawProgress = (timeIntoClip - transStart) / t.duration;
+                    progress = Math.min(1, Math.max(0, rawProgress * transSpeed));
                     incomingItem = mainItem;
                     if (mainItemIndex > 0) outgoingItem = sortedItems[mainItemIndex - 1];
                 }
@@ -828,7 +872,10 @@ export class ExportEngine {
                     if (timeUntilNext <= transDurationBeforeStart) {
                         isTransitioning = true;
                         transition = t;
-                        progress = (transDurationBeforeStart - timeUntilNext) / t.duration;
+                        // Apply speed modifier: speed > 1 = faster animation, speed < 1 = slower
+                        const transSpeed = t.speed ?? 1.0;
+                        const rawProgress = (transDurationBeforeStart - timeUntilNext) / t.duration;
+                        progress = Math.min(1, Math.max(0, rawProgress * transSpeed));
                         incomingItem = nextItem;
                         if (nextItemIndex > 0) outgoingItem = sortedItems[nextItemIndex - 1];
                     }
@@ -3471,6 +3518,16 @@ export class ExportEngine {
         }
         this.videoCache.clear();
         this.imageCache.clear();
+
+        // Dispose GPU compositor to prevent WebGL context issues
+        if (this.gpuInitialized) {
+            try {
+                gpuCompositor.dispose();
+            } catch (e) {
+                console.warn('[ExportEngine] Error disposing GPU compositor:', e);
+            }
+            this.gpuInitialized = false;
+        }
 
         this.canvas = null;
         this.ctx = null;

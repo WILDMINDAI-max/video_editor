@@ -486,7 +486,10 @@ const Canvas: React.FC<CanvasProps> = ({
                         if (timeIntoClip >= transStart && timeIntoClip <= transStart + t.duration) {
                             isTransitioning = true;
                             transition = t;
-                            progress = (timeIntoClip - transStart) / t.duration;
+                            // Apply speed modifier: speed > 1 = faster animation, speed < 1 = slower
+                            const transSpeed = t.speed ?? 1.0;
+                            const rawProgress = (timeIntoClip - transStart) / t.duration;
+                            progress = Math.min(1, Math.max(0, rawProgress * transSpeed));
                             incomingItem = mainItem;
                             if (mainItemIndex > 0) outgoingItem = sortedItems[mainItemIndex - 1];
                         }
@@ -517,7 +520,10 @@ const Canvas: React.FC<CanvasProps> = ({
                                 // Current time relative to nextItem.start: -timeUntilNext
                                 // Progress = (Current - Start) / Duration
                                 // = (-timeUntilNext - (-transDurationBeforeStart)) / Duration
-                                progress = (transDurationBeforeStart - timeUntilNext) / t.duration;
+                                // Apply speed modifier: speed > 1 = faster animation, speed < 1 = slower
+                                const transSpeed = t.speed ?? 1.0;
+                                const rawProgress = (transDurationBeforeStart - timeUntilNext) / t.duration;
+                                progress = Math.min(1, Math.max(0, rawProgress * transSpeed));
 
                                 incomingItem = nextItem;
                                 if (nextItemIndex > 0) outgoingItem = sortedItems[nextItemIndex - 1];
