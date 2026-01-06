@@ -13,6 +13,7 @@ import { hardwareAccel } from '../engine/HardwareAccel';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 import { audioMixer } from './AudioMixer';
+import { videoFrameCache } from './VideoFrameCache';
 // NOTE: FFmpegExportService is imported dynamically to prevent Next.js bundling issues
 
 export type ExportMode = 'auto' | 'ffmpeg' | 'webcodecs' | 'mediarecorder';
@@ -239,7 +240,30 @@ export class ExportEngine {
             console.log(`%c🎨 Quality: ${settings.quality.toUpperCase()}`, 'color: #ffaa00');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n');
 
-            // Create offscreen canvas for rendering
+            // Initialize GPU compositor FIRST with its own dedicated canvas (if enabled)
+            // This must happen BEFORE creating the 2D canvas to avoid context conflicts
+            // (A canvas can only have ONE type of context - 2D or WebGL, not both)
+            let actuallyUsingGPU = false;
+            if (useGPU) {
+                try {
+                    // Create a SEPARATE canvas for GPU compositing (WebGL2)
+                    const gpuCanvas = document.createElement('canvas');
+                    gpuCanvas.width = settings.resolution.width;
+                    gpuCanvas.height = settings.resolution.height;
+
+                    const gpuInitSuccess = await gpuCompositor.initialize(gpuCanvas);
+                    if (gpuInitSuccess) {
+                        gpuCompositor.setResolution(settings.resolution.width, settings.resolution.height);
+                        actuallyUsingGPU = true;
+                        this.gpuInitialized = true;
+                        console.log('%c✨ GPU Compositor initialized for export (separate canvas)', 'color: #00ff00');
+                    }
+                } catch (error) {
+                    console.warn('%c⚠️ GPU initialization failed, using CPU rendering', 'color: #ff6600', error);
+                }
+            }
+
+            // Create offscreen canvas for 2D rendering (main export canvas)
             this.canvas = document.createElement('canvas');
             this.canvas.width = settings.resolution.width;
             this.canvas.height = settings.resolution.height;
@@ -258,32 +282,21 @@ export class ExportEngine {
             this.resolutionScale = settings.resolution.width / designWidth;
             console.log(`%c📐 Resolution scale: ${this.resolutionScale.toFixed(3)} (${settings.resolution.width}/${designWidth})`, 'color: #00aaff');
 
-            // Initialize GPU compositor if enabled (with fallback)
-            let actuallyUsingGPU = false;
-            if (useGPU) {
-                try {
-                    const gpuInitSuccess = await gpuCompositor.initialize(this.canvas);
-                    if (gpuInitSuccess) {
-                        gpuCompositor.setResolution(settings.resolution.width, settings.resolution.height);
-                        actuallyUsingGPU = true;
-                        this.gpuInitialized = true;
-                        console.log('%c✨ GPU Compositor initialized for export', 'color: #00ff00');
-                    }
-                } catch (error) {
-                    console.warn('%c⚠️ GPU initialization failed', 'color: #ff6600', error);
-                }
-            }
-
             // Determine and log acceleration mode
             this.accelerationMode = this.determineAccelerationMode(actuallyUsingGPU);
             this.logAccelerationMode(this.accelerationMode);
 
+            // Initialize frame cache with adaptive window based on resolution
+            console.log('%c🎯 [FrameCache] Initializing frame cache...', 'color: #ff00ff; font-weight: bold');
+            videoFrameCache.setAdaptiveWindow(settings.resolution.width, settings.resolution.height);
+
             // Pre-load all video elements
             console.log('%c📦 Pre-loading all video assets...', 'color: #00aaff');
-            await this.preloadAllVideos(tracks);
-            console.log('%c✅ All videos pre-loaded!', 'color: #00ff00');
+            await this.preloadAllVideos(tracks, settings.fps);
+            console.log('%c✅ All videos pre-loaded and registered with frame cache!', 'color: #00ff00');
 
             // === AUDIO PROCESSING ===
+
             console.log('%c🎵 Processing audio tracks...', 'color: #00aaff');
             const audioClips = audioMixer.getAudioClips(tracks);
             let mixedAudio: { audioBuffer: AudioBuffer; sampleRate: number; numberOfChannels: number } | null = null;
@@ -401,21 +414,27 @@ export class ExportEngine {
 
                 // Back-pressure: wait if encoder queue is getting too full
                 // This prevents the encoder from being overwhelmed and ensures frames are actually encoded
-                const maxQueueSize = 10; // Keep queue small to ensure frames are processed
+                // With modern GPUs (NVIDIA RTX), a larger queue (30) improves throughput
+                const maxQueueSize = 30;
                 while (encoder.encodeQueueSize > maxQueueSize) {
                     // Wait a bit for the encoder to catch up
-                    await new Promise(resolve => setTimeout(resolve, 10));
+                    await new Promise(resolve => setTimeout(resolve, 5));
                 }
 
-                // Periodic memory management - more aggressive for 4K
-                if ((frameIndex + 1) % cacheCleanupInterval === 0) {
-                    this.clearCaches();
 
+                // Periodic memory management - more aggressive for 4K
+                // NOTE: DO NOT clear video caches during export!
+                // Clearing caches destroys blob URLs that are still needed,
+                // causing videos to fail to load and massive slowdowns.
+                // Caches are cleared after export completes in cleanup().
+                if ((frameIndex + 1) % cacheCleanupInterval === 0) {
+                    // Log memory usage for debugging (but don't clear caches!)
                     const memInfo = this.getMemoryInfo();
                     if (memInfo.percentage && isHighRes) {
                         console.log(`   📊 Memory: ${memInfo.used.toFixed(0)}MB / ${memInfo.limit?.toFixed(0) || '?'}MB (${memInfo.percentage.toFixed(1)}%)`);
                     }
                 }
+
 
                 // Update progress
                 const progress = ((frameIndex + 1) / totalFrames) * 100;
@@ -749,12 +768,13 @@ export class ExportEngine {
             let transitionStyle: TransitionStyle = {};
             if (transition && transition.type !== 'none') {
                 transitionStyle = this.calculateTransitionStyle(transition.type, transition.direction || 'left', transitionProgress, role);
-                // Debug: Log transition detection with item details
-                if (transitionProgress > 0.01 && transitionProgress < 0.99) {
-                    console.log(`%c🎬 TRANSITION [${transition.type}] role=${role} progress=${transitionProgress.toFixed(2)} | item="${item.name}" id=${item.id.slice(0, 8)} offset=${item.offset?.toFixed(3) ?? 'N/A'} start=${item.start.toFixed(3)} dur=${item.duration.toFixed(3)} | clipType=${transitionStyle.clipType || 'none'}`,
-                        'color: #ff6600; font-weight: bold');
-                }
+                // Debug: Log transition detection (disabled for performance)
+                // Uncomment for debugging transitions:
+                // if (transitionProgress > 0.01 && transitionProgress < 0.99) {
+                //     console.log(`%c🎬 TRANSITION [${transition.type}] role=${role} progress=${transitionProgress.toFixed(2)}...`, 'color: #ff6600');
+                // }
             }
+
 
             // Render based on type
             if (item.type === 'video' || item.type === 'image') {
@@ -3160,18 +3180,17 @@ export class ExportEngine {
             // Clamp to valid video duration
             const clampedTime = Math.max(0, Math.min(timeInSourceVideo, video.duration - 0.01));
 
-            // Debug logging for split video transitions
-            console.log(`%c[ExportEngine] loadMediaElement: "${item.name}" id=${item.id.slice(0, 8)} | currentTime=${currentTime.toFixed(3)} | item.start=${item.start.toFixed(3)} | offset=${offset.toFixed(3)} | rawTimeInClip=${rawTimeInClip.toFixed(3)} | timeInClip=${timeInClip.toFixed(3)} | timeInSource=${timeInSourceVideo.toFixed(3)} | clampedTime=${clampedTime.toFixed(3)}`, 'color: #00aaff');
-
-            // Seek to the correct time and wait for frame to be ready
+            // Seek to the correct time if needed
+            // Frame cache prefetch was disabled because it was hurting performance
+            // (using same slow seeking, competing for video element)
             if (Math.abs(video.currentTime - clampedTime) > 0.01) {
                 video.currentTime = clampedTime;
-
-                // Wait for seek to complete with multiple fallback mechanisms
+                // Wait for seek to complete
                 await this.waitForVideoFrame(video);
             }
 
             return video;
+
         }
 
         return null;
@@ -3179,35 +3198,50 @@ export class ExportEngine {
 
     /**
      * Wait for video frame to be ready after seeking
-     * Fast but ensures frame is decoded
+     * OPTIMIZED: Uses requestVideoFrameCallback with minimal fallback delay
      */
     private async waitForVideoFrame(video: HTMLVideoElement): Promise<void> {
+        const seekStart = performance.now();
+
         return new Promise<void>((resolve) => {
             const videoAny = video as any;
 
-            // requestVideoFrameCallback is fast AND guarantees frame is ready
+            // requestVideoFrameCallback is the fastest way to know frame is ready
             if (typeof videoAny.requestVideoFrameCallback === 'function') {
-                videoAny.requestVideoFrameCallback(() => resolve());
+                videoAny.requestVideoFrameCallback(() => {
+                    const seekTime = performance.now() - seekStart;
+                    // Only log slow seeks to reduce console noise
+                    if (seekTime > 50) {
+                        console.log(`%c⏱️ [Seek] Slow seek: ${seekTime.toFixed(0)}ms`, 'color: #ff6600');
+                    }
+                    resolve();
+                });
                 return;
             }
 
-            // Fallback: wait for seeked + minimal decode time
+            // Fallback for browsers without requestVideoFrameCallback
+            // Use seeked event with minimal delay
             let isResolved = false;
             const done = () => {
                 if (isResolved) return;
                 isResolved = true;
+                const seekTime = performance.now() - seekStart;
+                if (seekTime > 50) {
+                    console.log(`%c⏱️ [Seek] Fallback seek: ${seekTime.toFixed(0)}ms`, 'color: #ff6600');
+                }
                 resolve();
             };
 
             video.addEventListener('seeked', () => {
-                // Brief wait for decode - 16ms = 1 frame at 60fps
-                setTimeout(done, 16);
+                // Minimal wait - frame should be decoded after seeked fires
+                setTimeout(done, 8); // 8ms instead of 16ms
             }, { once: true });
 
-            // Quick timeout fallback
-            setTimeout(done, 100);
+            // Quick timeout fallback - 50ms max instead of 100ms
+            setTimeout(done, 50);
         });
     }
+
 
     /**
      * Create and load a video element
@@ -3253,8 +3287,9 @@ export class ExportEngine {
 
     /**
      * Pre-load all video elements from the timeline to ensure smooth export
+     * Also registers videos with the frame cache for prefetching
      */
-    private async preloadAllVideos(tracks: Track[]): Promise<void> {
+    private async preloadAllVideos(tracks: Track[], fps: number = 30): Promise<void> {
         const videoItems: TimelineItem[] = [];
 
         // Collect all video items from all tracks
@@ -3285,6 +3320,14 @@ export class ExportEngine {
             if (video) {
                 this.videoCache.set(item.id, video);
 
+                // Register video with frame cache for prefetching
+                try {
+                    videoFrameCache.registerVideo(item.id, video, fps);
+                    console.log(`%c   🎯 [FrameCache] Registered: ${item.name || item.id}`, 'color: #ff00ff');
+                } catch (e) {
+                    console.warn(`   ⚠ Frame cache registration failed: ${item.name || item.id}`, e);
+                }
+
                 // Pre-buffer the video by seeking through key positions
                 try {
                     // Seek to start and wait
@@ -3306,7 +3349,11 @@ export class ExportEngine {
 
         await Promise.all(loadPromises);
         console.log(`[ExportEngine] All ${videoItems.length} video(s) pre-loaded`);
+
+        // Log frame cache status
+        videoFrameCache.logStatus();
     }
+
 
     /**
      * Set up audio tracks from timeline using Web Audio API
@@ -3510,6 +3557,16 @@ export class ExportEngine {
      * Cleanup resources
      */
     private cleanup(): void {
+        console.log('%c🧹 [Cleanup] Starting export cleanup...', 'color: #ffaa00; font-weight: bold');
+
+        // Log final frame cache stats before clearing
+        const cacheStats = videoFrameCache.getMemoryUsage();
+        console.log(`%c📊 [FrameCache] Final stats: ${cacheStats.totalFrames} frames, ~${cacheStats.estimatedMB.toFixed(1)}MB`, 'color: #00aaff');
+
+        // Clean up frame cache
+        videoFrameCache.clearAll();
+        console.log('%c✅ [FrameCache] Cleared all cached frames', 'color: #00ff00');
+
         // Clean up video elements
         for (const video of this.videoCache.values()) {
             video.pause();
@@ -3518,11 +3575,13 @@ export class ExportEngine {
         }
         this.videoCache.clear();
         this.imageCache.clear();
+        console.log('%c✅ [Cleanup] Cleared video and image caches', 'color: #00ff00');
 
         // Dispose GPU compositor to prevent WebGL context issues
         if (this.gpuInitialized) {
             try {
                 gpuCompositor.dispose();
+                console.log('%c✅ [Cleanup] Disposed GPU compositor', 'color: #00ff00');
             } catch (e) {
                 console.warn('[ExportEngine] Error disposing GPU compositor:', e);
             }
@@ -3531,7 +3590,9 @@ export class ExportEngine {
 
         this.canvas = null;
         this.ctx = null;
+        console.log('%c🧹 [Cleanup] Export cleanup complete', 'color: #ffaa00; font-weight: bold');
     }
+
 }
 
 export const exportEngine = new ExportEngine();
