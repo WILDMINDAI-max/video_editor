@@ -14,6 +14,8 @@ import RightSidebar from './components/RightSidebar';
 import PreviewModal from './components/PreviewModal';
 import ExportModal from './components/ExportModal';
 import { Tab, CanvasDimension, Track, TimelineItem, RESIZE_OPTIONS, MOCK_VIDEOS, MOCK_IMAGES, Transition, TransitionType } from '@/types';
+import { ProjectManager, LoadProjectResult } from '@/core/project/ProjectManager';
+import { ProjectUpload } from '@/core/project/ProjectTypes';
 import '@/app/animations.css';
 
 interface VideoEditorProps { }
@@ -166,57 +168,80 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
         setIsProjectDrawerOpen(true);
     };
 
-    const handleSaveProject = () => {
-        const projectData = {
-            version: "1.0",
-            timestamp: new Date().toISOString(),
+    const handleSaveProject = async () => {
+        // Convert current uploads to ProjectUpload format
+        const projectUploads: ProjectUpload[] = uploads.map(u => ({
+            id: u.id,
+            type: u.type,
+            src: u.src,
+            name: u.name,
+            thumbnail: u.thumbnail,
+            duration: u.duration
+        }));
+
+        await ProjectManager.saveProject(
             projectName,
-            dimension: currentDimension,
-            tracks
-        };
-        const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${projectName}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+            currentDimension,
+            currentTime,
+            tracks,
+            projectUploads
+        );
     };
 
-    const handleLoadProject = () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = (e) => {
-            const file = (e.target as HTMLInputElement).files?.[0];
+    const handleLoadProject = async () => {
+        try {
+            const file = await ProjectManager.openFileDialog();
             if (!file) return;
 
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                try {
-                    const result = event.target?.result as string;
-                    const data = JSON.parse(result);
+            let result: LoadProjectResult;
 
-                    if (data.tracks && data.dimension) {
-                        setProjectName(data.projectName || 'Untitled Project');
-                        setCurrentDimension(data.dimension);
-                        setTracks(data.tracks);
-                        setPast([]);
-                        setFuture([]);
-                        setCurrentTime(0);
-                    } else {
-                        alert('Invalid project file format.');
-                    }
-                } catch (error) {
-                    console.error('Error loading project:', error);
-                    alert('Failed to load project file.');
-                }
-            };
-            reader.readAsText(file);
-        };
-        input.click();
+            // Check if it's a ZIP-based project file
+            if (file.name.endsWith('.wmpv') || file.name.endsWith('.zip')) {
+                // Use ZIP loader for new format
+                result = await ProjectManager.loadProjectFromZip(file);
+            } else {
+                // Fallback to JSON loader for legacy files
+                const content = await ProjectManager.readFile(file);
+                result = ProjectManager.loadProject(content);
+            }
+
+            if (!result.success || !result.data) {
+                alert(result.error || 'Failed to load project file.');
+                return;
+            }
+
+            const { data } = result;
+
+            // Restore project state
+            setProjectName(data.name || 'Untitled Project');
+            setCurrentDimension(data.dimension);
+            setTracks(data.tracks);
+            setCurrentTime(data.currentTime || 0);
+
+            // Restore uploads
+            if (data.uploads && Array.isArray(data.uploads)) {
+                setUploads(data.uploads.map(u => ({
+                    id: u.id,
+                    type: u.type,
+                    src: u.src,
+                    name: u.name,
+                    thumbnail: u.thumbnail,
+                    duration: u.duration
+                })));
+            }
+
+            // Reset undo/redo history
+            setPast([]);
+            setFuture([]);
+
+            // Show success message for legacy files
+            if (result.isLegacyFormat) {
+                console.log('Loaded legacy project format. Consider re-saving to upgrade.');
+            }
+        } catch (error) {
+            console.error('Error loading project:', error);
+            alert('Failed to load project file. Please ensure it is a valid project file.');
+        }
     };
 
     const handleMakeCopy = () => {

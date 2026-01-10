@@ -98,6 +98,26 @@ export class GPUCompositor {
 
         this.gl = gl;
 
+        // Handle WebGL context loss gracefully
+        this.canvas!.addEventListener('webglcontextlost', (event) => {
+            event.preventDefault();
+            console.warn('[GPUCompositor] WebGL context lost');
+            this.isInitialized = false;
+            this.gl = null;
+        });
+
+        this.canvas!.addEventListener('webglcontextrestored', () => {
+            console.log('[GPUCompositor] WebGL context restored, reinitializing...');
+            try {
+                this.initWebGL2();
+                if (this.gl) {
+                    this.isInitialized = true;
+                }
+            } catch (e) {
+                console.warn('[GPUCompositor] Failed to restore context:', e);
+            }
+        });
+
         // Enable required extensions
         gl.getExtension('EXT_color_buffer_float');
         gl.getExtension('OES_texture_float_linear');

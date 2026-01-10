@@ -136,14 +136,14 @@ const Header: React.FC<HeaderProps> = ({
                                     className="px-4 py-2 text-sm hover:bg-white/5 flex items-center gap-3 text-left"
                                     onClick={() => { onLoadProject(); setIsFileMenuOpen(false); }}
                                 >
-                                    <FolderOpen size={16} /> Open project
+                                    <FolderOpen size={16} /> Open Project...
                                 </button>
                                 <div className="h-px bg-gray-700 my-1"></div>
                                 <button
                                     className="px-4 py-2 text-sm hover:bg-white/5 flex items-center gap-3 text-left"
                                     onClick={() => { onSaveProject(); setIsFileMenuOpen(false); }}
                                 >
-                                    <Cloud size={16} /> Save
+                                    <Cloud size={16} /> Save Project
                                 </button>
                                 <button
                                     className="px-4 py-2 text-sm hover:bg-white/5 flex items-center gap-3 text-left"
