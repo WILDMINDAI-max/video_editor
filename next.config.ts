@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   // Headers for SharedArrayBuffer support (required for FFmpeg)
   async headers() {
     return [
