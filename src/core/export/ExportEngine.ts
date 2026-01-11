@@ -11,7 +11,7 @@ import { BITRATE_CONFIGS } from '../types/export';
 import { gpuCompositor } from '../compositor/GPUCompositor';
 import { hardwareAccel } from '../engine/HardwareAccel';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
-import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
+import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget, StreamTarget as Mp4StreamTarget } from 'mp4-muxer';
 import { audioMixer } from './AudioMixer';
 import { videoFrameCache } from './VideoFrameCache';
 // NOTE: FFmpegExportService is imported dynamically to prevent Next.js bundling issues
@@ -318,28 +318,89 @@ export class ExportEngine {
 
             console.log(`%c🎬 Rendering ${totalFrames} frames using H.264/MP4...`, 'font-weight: bold; color: #00ff00');
 
-            // Set up mp4-muxer for H.264 with optional audio
-            const muxerTarget = new Mp4ArrayBufferTarget();
-            const muxerConfig: any = {
-                target: muxerTarget,
-                video: {
-                    codec: 'avc', // H.264/AVC
-                    width: settings.resolution.width,
-                    height: settings.resolution.height,
-                },
-                fastStart: 'in-memory', // Enable fast start for streaming
-            };
+            // Determine if we should use streaming mode for memory efficiency
+            // Use streaming for videos > 2 minutes OR high resolution (4K+)
+            const isLongVideo = duration > 120; // 2 minutes
+            const isHighRes = settings.resolution.width >= 3840 || settings.resolution.height >= 2160;
+            const useStreaming = isLongVideo || isHighRes;
 
-            // Add audio configuration if we have mixed audio
-            if (mixedAudio) {
-                muxerConfig.audio = {
-                    codec: 'aac',
-                    sampleRate: mixedAudio.sampleRate,
-                    numberOfChannels: mixedAudio.numberOfChannels,
+            // Chunk-based storage for streaming mode - releases memory periodically
+            const videoChunks: Uint8Array[] = [];
+            let totalBytesWritten = 0;
+
+            // Set up mp4-muxer with appropriate target
+            let muxerTarget: Mp4ArrayBufferTarget | null = null;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let muxer: any;
+
+            if (useStreaming) {
+                console.log('%c📦 Using STREAMING mode for memory efficiency (long/high-res video)', 'color: #00ff00; font-weight: bold');
+                console.log(`   Duration: ${duration.toFixed(1)}s, Resolution: ${settings.resolution.width}x${settings.resolution.height}`);
+
+                // Use StreamTarget with onData callback to collect chunks incrementally
+                const streamTarget = new Mp4StreamTarget({
+                    onData: (data, position) => {
+                        // Store chunk - copy to regular ArrayBuffer to avoid SharedArrayBuffer issues
+                        const chunk = new Uint8Array(data.length);
+                        chunk.set(data);
+                        videoChunks.push(chunk);
+                        totalBytesWritten += data.byteLength;
+
+                        // Log progress periodically (every ~10MB)
+                        if (totalBytesWritten % (10 * 1024 * 1024) < data.byteLength) {
+                            console.log(`   📊 Streamed: ${(totalBytesWritten / (1024 * 1024)).toFixed(1)} MB`);
+                        }
+                    },
+                });
+
+                const muxerConfig: any = {
+                    target: streamTarget,
+                    video: {
+                        codec: 'avc', // H.264/AVC
+                        width: settings.resolution.width,
+                        height: settings.resolution.height,
+                    },
+                    // Use 'fragmented' mode for streaming - writes fragments as they're created
+                    // This prevents accumulating all data in memory before finalize
+                    fastStart: 'fragmented',
                 };
-            }
 
-            const muxer = new Mp4Muxer(muxerConfig);
+                // Add audio configuration if we have mixed audio
+                if (mixedAudio) {
+                    muxerConfig.audio = {
+                        codec: 'aac',
+                        sampleRate: mixedAudio.sampleRate,
+                        numberOfChannels: mixedAudio.numberOfChannels,
+                    };
+                }
+
+                muxer = new Mp4Muxer(muxerConfig);
+            } else {
+                console.log('%c📦 Using IN-MEMORY mode for short video', 'color: #00aaff');
+
+                // Short videos: use ArrayBufferTarget (faster, simpler)
+                muxerTarget = new Mp4ArrayBufferTarget();
+                const muxerConfig: any = {
+                    target: muxerTarget,
+                    video: {
+                        codec: 'avc', // H.264/AVC
+                        width: settings.resolution.width,
+                        height: settings.resolution.height,
+                    },
+                    fastStart: 'in-memory', // Enable fast start for streaming
+                };
+
+                // Add audio configuration if we have mixed audio
+                if (mixedAudio) {
+                    muxerConfig.audio = {
+                        codec: 'aac',
+                        sampleRate: mixedAudio.sampleRate,
+                        numberOfChannels: mixedAudio.numberOfChannels,
+                    };
+                }
+
+                muxer = new Mp4Muxer(muxerConfig);
+            }
 
             // Set up VideoEncoder with H.264 for smooth VLC playback
             const encoder = new VideoEncoder({
@@ -385,7 +446,6 @@ export class ExportEngine {
             onProgress({ phase: 'rendering', progress: 0 });
 
             // Calculate resolution-aware settings for memory management
-            const isHighRes = settings.resolution.width >= 3840 || settings.resolution.height >= 2160;
             const cacheCleanupInterval = isHighRes ? 10 : 60; // More aggressive for 4K
             const progressLogInterval = isHighRes ? 15 : 30;
             let lastLogTime = Date.now();
@@ -575,8 +635,21 @@ export class ExportEngine {
             console.log('%c✅ Muxer finalized', 'color: #00ff00');
             onProgress({ phase: 'encoding', progress: 99 });
 
-            const buffer = muxerTarget.buffer;
-            const blob = new Blob([buffer], { type: 'video/mp4' });
+            // Create blob based on mode
+            let blob: Blob;
+            if (useStreaming) {
+                // Streaming mode: combine chunks into blob
+                console.log(`%c📊 Combining ${videoChunks.length} chunks (${(totalBytesWritten / (1024 * 1024)).toFixed(1)} MB total)...`, 'color: #00aaff');
+                blob = new Blob(videoChunks as BlobPart[], { type: 'video/mp4' });
+
+                // Clear chunks array to release memory
+                videoChunks.length = 0;
+                console.log('%c🧹 Chunks memory released', 'color: #00ff00');
+            } else {
+                // In-memory mode: use ArrayBufferTarget
+                const buffer = muxerTarget!.buffer;
+                blob = new Blob([buffer], { type: 'video/mp4' });
+            }
 
             onProgress({ phase: 'complete', progress: 100 });
 
