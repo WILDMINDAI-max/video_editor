@@ -32,6 +32,7 @@ interface TimelineProps {
     onDetach: (trackId: string, itemId: string) => void;
     onMoveClip?: (itemId: string, sourceTrackId: string, targetTrackId: string, newStart: number) => void;
     onDropClip: (trackId: string, time: number, item: any) => void;
+    onDropFiles?: (trackId: string, time: number, files: FileList) => void;
     onClipDragEnd?: (trackId: string) => void;
 }
 
@@ -42,12 +43,14 @@ const Timeline: React.FC<TimelineProps> = ({
     tracks, currentTime, totalDuration, isPlaying, selectedItemId,
     onPlayPause, onSeek, onUpdateClip, onDeleteClip, onSplitClip, onClearAll,
     onAddTrackItem, onSelectTransition, onSelectClip,
-    onCopy, onPaste, onDuplicate, onLock, onDetach, onMoveClip, onDropClip, onClipDragEnd
+    onCopy, onPaste, onDuplicate, onLock, onDetach, onMoveClip, onDropClip, onDropFiles, onClipDragEnd
 }) => {
     const [zoom, setZoom] = useState(40); // pixels per second
     const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
     const [hoveredTrackId, setHoveredTrackId] = useState<string | null>(null);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
+    const [isDraggingClip, setIsDraggingClip] = useState(false);
+    const [dragPreviewPosition, setDragPreviewPosition] = useState<number | null>(null);
 
     // Context Menu State
     const [activeClipMenu, setActiveClipMenu] = useState<{ trackId: string, itemId: string, x: number, y: number } | null>(null);
@@ -137,6 +140,7 @@ const Timeline: React.FC<TimelineProps> = ({
             minStart: 0, // Only constrain to start of timeline
             maxStart: undefined
         });
+        setIsDraggingClip(true);
     };
 
     const handleResizeMouseDown = (e: React.MouseEvent, trackId: string, item: TimelineItem, direction: 'left' | 'right') => {
@@ -221,6 +225,9 @@ const Timeline: React.FC<TimelineProps> = ({
             }
 
             onUpdateClip(dragState.trackId, newItem);
+
+            // Update preview position for drop indicator
+            setDragPreviewPosition(newItem.start);
         };
 
         const handleWindowMouseUp = (e: MouseEvent) => {
@@ -236,6 +243,8 @@ const Timeline: React.FC<TimelineProps> = ({
                 }
             }
             setDragState(null);
+            setIsDraggingClip(false);
+            setDragPreviewPosition(null);
         };
 
         if (dragState) {
@@ -456,7 +465,11 @@ const Timeline: React.FC<TimelineProps> = ({
                 <div className="w-40 bg-white border-r border-gray-200 flex flex-col shrink-0 z-20 shadow-[4px_0_5px_-2px_rgba(0,0,0,0.05)]">
                     <div className="h-8 border-b border-gray-100 bg-gray-50"></div>
                     <div className="flex-1 overflow-hidden">
-                        {tracks.map(track => (
+                        {/* Sort tracks: overlays first (top), main-video middle, audio last (bottom) */}
+                        {[...tracks].sort((a, b) => {
+                            const order = (t: typeof a) => t.type === 'overlay' ? 0 : t.id === 'main-video' ? 1 : 2;
+                            return order(a) - order(b);
+                        }).map(track => (
                             <div
                                 key={track.id}
                                 className={`${getTrackHeightClass(track.type)} border-b border-gray-100 flex items-center px-3 gap-2 hover:bg-gray-50 group transition-colors`}
@@ -508,10 +521,18 @@ const Timeline: React.FC<TimelineProps> = ({
                                 style={{ left: currentTime * zoom }}
                             ></div>
 
-                            {tracks.map(track => (
+                            {/* Sort tracks same as headers: overlays first, main-video middle, audio last */}
+                            {[...tracks].sort((a, b) => {
+                                const order = (t: typeof a) => t.type === 'overlay' ? 0 : t.id === 'main-video' ? 1 : 2;
+                                return order(a) - order(b);
+                            }).map(track => (
                                 <div
                                     key={track.id}
-                                    className={`${getTrackHeightClass(track.type)} border-b border-gray-200/50 relative mb-0.5 group ${hoveredTrackId === track.id && dragState?.type === 'move' ? 'bg-violet-50/50' : ''}`}
+                                    className={`${getTrackHeightClass(track.type)} border-b border-gray-200/50 relative mb-0.5 group transition-all duration-200 ${hoveredTrackId === track.id && dragState?.type === 'move' && dragState.trackId !== track.id
+                                        ? 'bg-violet-100 ring-2 ring-violet-400 ring-inset shadow-inner'
+                                        : hoveredTrackId === track.id && dragState?.type === 'move'
+                                            ? 'bg-violet-50/50'
+                                            : ''}`}
                                     onMouseEnter={() => setHoveredTrackId(track.id)}
                                     onDragOver={(e) => {
                                         e.preventDefault();
@@ -519,6 +540,19 @@ const Timeline: React.FC<TimelineProps> = ({
                                     }}
                                     onDrop={(e) => {
                                         e.preventDefault();
+
+                                        // Check for system files first (drag from Windows Explorer)
+                                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0 && onDropFiles) {
+                                            if (scrollContainerRef.current) {
+                                                const rect = scrollContainerRef.current.getBoundingClientRect();
+                                                const offsetX = e.clientX - rect.left + scrollContainerRef.current.scrollLeft;
+                                                const dropTime = Math.max(0, offsetX / zoom);
+                                                onDropFiles(track.id, dropTime, e.dataTransfer.files);
+                                            }
+                                            return;
+                                        }
+
+                                        // Existing JSON data handling (internal drag and drop)
                                         const data = e.dataTransfer.getData('application/json');
                                         if (data) {
                                             try {
@@ -537,19 +571,38 @@ const Timeline: React.FC<TimelineProps> = ({
                                 >
                                     <div className="absolute inset-0 bg-white/50 group-hover:bg-white/80 transition-colors"></div>
 
+                                    {/* Drop Zone Indicator - shows where clip will land when dragging to this track */}
+                                    {dragState?.type === 'move' && hoveredTrackId === track.id && dragState.trackId !== track.id && dragPreviewPosition !== null && (
+                                        <div
+                                            className="absolute top-0 bottom-0 w-1 bg-violet-500 z-40 animate-pulse shadow-lg"
+                                            style={{
+                                                left: dragPreviewPosition * zoom - 2,
+                                                boxShadow: '0 0 10px rgba(139, 92, 246, 0.6)'
+                                            }}
+                                        >
+                                            <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-violet-500 rounded-full" />
+                                            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-violet-500 rounded-full" />
+                                        </div>
+                                    )}
+
                                     {/* Items */}
                                     {track.items.map(item => (
                                         <div
                                             key={item.id}
-                                            className={`absolute top-0.5 bottom-0.5 rounded-md overflow-hidden cursor-pointer border group/item touch-none shadow-sm ${selectedItemId === item.id
+                                            className={`absolute top-0.5 bottom-0.5 rounded-md overflow-hidden cursor-pointer border group/item touch-none shadow-sm transition-all duration-150 ${selectedItemId === item.id
                                                 ? 'border-violet-600 ring-1 ring-violet-200 z-10'
                                                 : item.isLocked
                                                     ? 'border-gray-300 bg-gray-100 opacity-80'
                                                     : 'border-violet-300 bg-violet-100 hover:border-violet-400'
-                                                }`}
+                                                } ${dragState?.type === 'move' && dragState.itemId === item.id
+                                                    ? 'opacity-90 scale-[1.02] shadow-xl z-50 ring-2 ring-violet-500 cursor-grabbing'
+                                                    : isDraggingClip && dragState?.itemId !== item.id
+                                                        ? 'opacity-60'
+                                                        : ''}`}
                                             style={{
                                                 left: item.start * zoom,
-                                                width: item.duration * zoom
+                                                width: item.duration * zoom,
+                                                transition: dragState?.itemId === item.id ? 'none' : 'left 0.15s ease-out, width 0.15s ease-out, opacity 0.15s, transform 0.15s, box-shadow 0.15s'
                                             }}
                                             onMouseDown={(e) => handleItemMouseDown(e, track.id, item)}
                                             onClick={(e) => e.stopPropagation()}

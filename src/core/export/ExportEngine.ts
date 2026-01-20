@@ -26,6 +26,7 @@ interface TransitionStyle {
     scaleX?: number;
     scaleY?: number;
     rotate?: number;
+    skew?: number; // degrees - horizontal skew
     translateX?: number;
     translateY?: number;
     blur?: number;
@@ -35,6 +36,7 @@ interface TransitionStyle {
     saturate?: number;
     sepia?: number;
     hueRotate?: number; // degrees
+    invert?: number; // 0-1 for color inversion
     // Clip path types
     clipType?: 'none' | 'inset' | 'circle' | 'polygon';
     clipInset?: { top: number; right: number; bottom: number; left: number }; // percentages
@@ -1224,6 +1226,11 @@ export class ExportEngine {
             renderCtx.translate(x + width / 2 + translateX, y + height / 2 + translateY);
         }
         if (rotation) renderCtx.rotate((rotation * Math.PI) / 180);
+        // Apply skew transform (canvas uses transform matrix for skew)
+        if (transitionStyle.skew !== undefined && transitionStyle.skew !== 0) {
+            const skewRad = (transitionStyle.skew * Math.PI) / 180;
+            renderCtx.transform(1, 0, Math.tan(skewRad), 1, 0, 0); // Horizontal skew
+        }
         if (scaleX !== 1 || scaleY !== 1) renderCtx.scale(scaleX, scaleY);
 
         // Build filter string
@@ -1297,9 +1304,16 @@ export class ExportEngine {
             filters.push(`hue-rotate(${transitionStyle.hueRotate}deg)`);
         }
 
+        // Transition invert
+        if (transitionStyle.invert !== undefined && transitionStyle.invert !== 0) {
+            filters.push(`invert(${transitionStyle.invert})`);
+        }
+
         if (filters.length > 0) {
             renderCtx.filter = filters.join(' ');
         }
+
+
 
         // Apply blend mode if specified (skip for mask rendering)
         if (!needsMaskRendering && transitionStyle.blendMode) {
@@ -1473,60 +1487,172 @@ export class ExportEngine {
 
         switch (type) {
             // === DISSOLVES ===
-            // Note: Dissolves include subtle scale for split video visibility
             case 'dissolve': {
-                const dissolveEase = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-                const scaleDissolve = 1 + 0.05 * (1 - dissolveEase);
+                // Cinematic soft-focus dissolve with blur, scale, and desaturation
+                const dissolveEase = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; // Quadratic ease in-out
+                const dissolveBlur = Math.sin(p * Math.PI) * 4; // Peaks at midpoint
+                const dissolveSat = 1 - Math.sin(p * Math.PI) * 0.3; // Desaturates at midpoint
+                const dissolveScale = 1 + Math.sin(p * Math.PI) * 0.03; // Subtle scale pulse
                 return role === 'main'
-                    ? { opacity: dissolveEase, brightness: 0.98 + dissolveEase * 0.02, scale: scaleDissolve }
-                    : { opacity: 1 - dissolveEase, brightness: 1 - (1 - dissolveEase) * 0.02 };
+                    ? {
+                        opacity: dissolveEase,
+                        blur: dissolveBlur * (1 - dissolveEase),
+                        saturate: dissolveSat,
+                        brightness: 0.95 + dissolveEase * 0.05,
+                        scale: dissolveScale
+                    }
+                    : {
+                        opacity: 1 - dissolveEase,
+                        blur: dissolveBlur * dissolveEase,
+                        saturate: dissolveSat,
+                        brightness: 1 - dissolveEase * 0.05
+                    };
             }
             case 'film-dissolve': {
+                // Unique film-style dissolve with warm light flash and exposure bloom
                 const filmP = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-                const scaleFilm = 1 + 0.05 * (1 - filmP);
+                const lightFlash = Math.sin(p * Math.PI) * 1.5; // Exposure flash peaks at midpoint
+                const warmShift = Math.sin(p * Math.PI) * 15; // Warm hue-rotate at midpoint
+                const filmScale = 1 + Math.sin(p * Math.PI) * 0.05; // Subtle zoom pulse
+                const filmSepia = Math.sin(p * Math.PI) * 0.25; // Strong sepia at midpoint
                 return role === 'main'
-                    ? { opacity: filmP, scale: scaleFilm }
-                    : { opacity: 1 - filmP };
+                    ? {
+                        opacity: filmP,
+                        brightness: 1 + lightFlash * (1 - filmP),
+                        sepia: filmSepia,
+                        hueRotate: warmShift,
+                        contrast: 1.1,
+                        scale: filmScale
+                    }
+                    : {
+                        opacity: 1 - filmP,
+                        brightness: 1 + lightFlash * filmP,
+                        sepia: filmSepia,
+                        hueRotate: warmShift,
+                        contrast: 1.1,
+                        scale: filmScale
+                    };
             }
             case 'additive-dissolve': {
-                const scaleAdditive = 1 + 0.05 * (1 - p);
-                return role === 'main' ? { opacity: p, scale: scaleAdditive } : { opacity: outP };
+                // Overexposed white wash with color inversion flash
+                const addP = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+                const whiteWash = Math.sin(p * Math.PI) * 4; // Extreme brightness at midpoint
+                const invertAmount = Math.sin(p * Math.PI); // 0 to 1 at peak for invert
+                const desatAmount = 1 - Math.sin(p * Math.PI) * 0.8; // Wash out colors
+                return role === 'main'
+                    ? {
+                        opacity: addP,
+                        brightness: 1 + whiteWash * (1 - addP),
+                        invert: invertAmount * (1 - addP),
+                        saturate: desatAmount,
+                        contrast: 1.3 - addP * 0.3
+                    }
+                    : {
+                        opacity: 1 - addP,
+                        brightness: 1 + whiteWash * addP,
+                        invert: invertAmount * addP,
+                        saturate: desatAmount,
+                        contrast: 1 + addP * 0.3
+                    };
             }
             case 'dip-to-black':
+                // Premiere Pro Dip to Black: brightness darkening fade to/from black
+                // First half: Clip A darkens (brightness decreases)
+                // Middle: Full black frame  
+                // Second half: Clip B brightens from black
                 if (role === 'outgoing') {
-                    return p < 0.5
-                        ? { opacity: 1 - p * 2, brightness: 1 - p * 1.2 }
-                        : { opacity: 0.05 };
+                    if (p < 0.5) {
+                        const t = p * 2; // 0 → 1 in first half
+                        return {
+                            opacity: 1,
+                            brightness: 1 - t, // Darken to black
+                            contrast: 1 - t * 0.3,
+                            saturate: 1 - t * 0.5
+                        };
+                    }
+                    return { opacity: 0 }; // Hidden in second half
                 }
-                return p > 0.5
-                    ? { opacity: (p - 0.5) * 2, brightness: 0.4 + (p - 0.5) * 1.2 }
-                    : { opacity: 0.05 };
+                if (p > 0.5) {
+                    const t = (p - 0.5) * 2; // 0 → 1 in second half
+                    return {
+                        opacity: t,
+                        brightness: t, // Brighten from black
+                        contrast: 0.7 + t * 0.3,
+                        saturate: 0.5 + t * 0.5
+                    };
+                }
+                return { opacity: 0 }; // Hidden during first half
             case 'dip-to-white':
+                // Premiere Pro Dip to White: brightness fade to/from white
+                // First half: Clip A brightens towards white
+                // Middle: Full white frame
+                // Second half: Clip B emerges from white
                 if (role === 'outgoing') {
-                    return p < 0.5
-                        ? { opacity: 1 - p * 2, brightness: 1 + p * 3 }
-                        : { opacity: 0.05 };
+                    if (p < 0.5) {
+                        const t = p * 2; // 0 → 1 in first half
+                        return {
+                            opacity: 1,
+                            brightness: 1 + t * 4, // Extreme brightness towards white
+                            contrast: 1 - t * 0.5,
+                            saturate: 1 - t // Desaturate to white
+                        };
+                    }
+                    return { opacity: 0 }; // Hidden in second half
                 }
-                return p > 0.5
-                    ? { opacity: (p - 0.5) * 2, brightness: 2.5 - (p - 0.5) * 3 }
-                    : { opacity: 0.05 };
+                if (p > 0.5) {
+                    const t = (p - 0.5) * 2; // 0 → 1 in second half
+                    return {
+                        opacity: t,
+                        brightness: 5 - t * 4, // Start bright, normalize
+                        contrast: 0.5 + t * 0.5,
+                        saturate: t // Restore saturation
+                    };
+                }
+                return { opacity: 0 }; // Hidden during first half
             case 'fade-dissolve':
                 if (role === 'outgoing') return { opacity: p < 0.5 ? 1 - p * 2 : 0.05 };
                 return { opacity: p > 0.5 ? (p - 0.5) * 2 : 0.05 };
 
             // === SLIDES & PUSHES ===
-            case 'slide':
+            case 'slide': {
+                // Slide (Uncover): Outgoing clip slides AWAY (Slide Out)
+                // Creates a reveal effect. Incoming clip stays stationary underneath.
+                const slideEase = easeOutCubic(p);
+                return role === 'outgoing'
+                    ? { translateX: xMult * -100 * p, translateY: yMult * -100 * p } // Outgoing slides OUT
+                    : { brightness: 0.5 + p * 0.5 }; // Incoming revealed underneath (brightens)
+            }
+            case 'push': {
+                // Push: Both clips move TOGETHER (like pushing paper)
+                // Synchronized movement with quadratic easing
+                const pushEase = 1 - Math.pow(1 - p, 2); // Quadratic ease-out
                 return role === 'main'
-                    ? { translateX: xMult * 100 * outP, translateY: yMult * 100 * outP }
-                    : {};
-            case 'push':
+                    ? { translateX: xMult * 100 * (1 - pushEase), translateY: yMult * 100 * (1 - pushEase) }
+                    : { translateX: xMult * -100 * pushEase, translateY: yMult * -100 * pushEase };
+            }
+            case 'whip': {
+                // Whip: High-speed pan with heavy directional blur
+                const whipEase = p < 0.5 ? 8 * p * p * p * p : 1 - Math.pow(-2 * p + 2, 4) / 2;
+                const blurAmount = Math.sin(p * Math.PI) * 20;
+                const whipScale = 1 + blurAmount * 0.005;
+                const whipBrightness = 1 + blurAmount * 0.01;
+
                 return role === 'main'
-                    ? { translateX: xMult * 100 * outP, translateY: yMult * 100 * outP }
-                    : { translateX: xMult * -100 * p, translateY: yMult * -100 * p };
-            case 'whip':
-                return role === 'main'
-                    ? { translateX: xMult * 100 * outP, translateY: yMult * 100 * outP, blur: Math.sin(p * Math.PI) * 5 }
-                    : { translateX: xMult * -100 * p, translateY: yMult * -100 * p, blur: Math.sin(p * Math.PI) * 5 };
+                    ? {
+                        translateX: xMult * 100 * (1 - whipEase),
+                        translateY: yMult * 100 * (1 - whipEase),
+                        blur: blurAmount,
+                        scale: whipScale,
+                        brightness: whipBrightness
+                    }
+                    : {
+                        translateX: xMult * -100 * whipEase,
+                        translateY: yMult * -100 * whipEase,
+                        blur: blurAmount,
+                        scale: whipScale,
+                        brightness: whipBrightness
+                    };
+            }
 
             // === IRIS SHAPES ===
             // Note: Iris transitions now include a subtle scale effect on the incoming clip
@@ -1711,33 +1837,40 @@ export class ExportEngine {
                 return { opacity: 1 - easeChk * 0.7, brightness: 1 - p * 0.2 };
             }
             case 'zig-zag': {
-                // Zig-zag wipe - diagonal stripes at 135° (top-left to bottom-right)
-                // CSS uses: linear-gradient(135deg, black xp%, transparent xp%) with mask-size: 12%
+                // Zig-zag wipe - simulated using a sawtooth polygon
+                // Matches CSS: repeating-linear-gradient(135deg, ...) 
                 const easeZ = easeOutCubic(p);
 
                 if (role === 'main') {
-                    // Create diagonal stripe pattern - 8 stripes (like 12% mask-size)
-                    // Each stripe runs diagonally from top-right to bottom-left
-                    // and reveals from top-left edge based on progress
                     const numStripes = 8;
-                    const stripeWidth = 100 / numStripes; // percentage of width
-                    const clipRegions: Array<{ x: number; y: number; w: number; h: number }> = [];
+                    const step = 100 / numStripes;
+                    const slope = step; // Approximate slope for 135deg
 
-                    // For each stripe, the reveal goes from left edge of stripe to right
-                    // At 135°, we need stripes that go diagonally
-                    // Approximate with vertical stripes that reveal from left
+                    // Y offset moves from -slope (hidden) to 100 (visible)
+                    const offset = easeZ * (100 + slope);
+
+                    const points: Array<{ x: number, y: number }> = [];
+                    points.push({ x: 0, y: 0 }); // Anchor Top-Left
+                    points.push({ x: 0, y: offset }); // Start first tooth
+
                     for (let i = 0; i < numStripes; i++) {
-                        const x = i * stripeWidth;
-                        // Each stripe reveals from its left edge
-                        const revealW = stripeWidth * easeZ;
-                        if (revealW > 0.1) {
-                            clipRegions.push({ x: x, y: 0, w: revealW, h: 100 });
+                        const xR = (i + 1) * step;
+                        const yR = offset - slope; // Diagonal up-right
+
+                        points.push({ x: xR, y: yR }); // Tooth tip
+                        // Drop down to next tooth start if needed
+                        if (i < numStripes - 1) {
+                            points.push({ x: xR, y: offset });
                         }
                     }
 
+                    points.push({ x: 100, y: 0 }); // Anchor Top-Right relative to fill
+
                     return {
-                        multiClip: clipRegions.length > 0 ? clipRegions : undefined,
-                        brightness: 0.8 + 0.2 * p
+                        clipType: 'polygon',
+                        clipPolygon: points,
+                        brightness: 0.8 + 0.2 * p,
+                        scale: 1 + 0.05 * (1 - easeZ)
                     };
                 }
                 return { brightness: 1 - p * 0.2 };
@@ -1756,9 +1889,11 @@ export class ExportEngine {
                     ? { scale: 0.5 + 0.5 * p, opacity: p }
                     : { opacity: outP };
             case 'zoom-out':
-                return role === 'outgoing'
-                    ? { scale: 1 + p * 0.5, opacity: outP }
-                    : { opacity: p };
+                // Match Canvas: Both clips zoom out (shrink away)
+                const easeOutZ = 1 - Math.pow(1 - p, 3);
+                return role === 'main' // Incoming
+                    ? { scale: 1.5 - 0.5 * easeOutZ, opacity: p }
+                    : { scale: 1 - p * 0.2, opacity: 1 - p };
 
             // === SPINS ===
             case 'spin':
@@ -1772,10 +1907,37 @@ export class ExportEngine {
 
             // === 3D TRANSITIONS ===
             case 'cube-rotate': {
+                // Simulate CSS: perspective(1200px) rotateY(angle) translateZ(100px)
+                // Using scaleX for horizontal compression and translateX for lateral movement
                 const cubeEase = easeOutCubic(p);
-                return role === 'main'
-                    ? { rotate: (1 - cubeEase) * -90, brightness: 0.7 + cubeEase * 0.3, opacity: cubeEase }
-                    : { rotate: cubeEase * 90, brightness: 1 - cubeEase * 0.3, opacity: 1 - cubeEase };
+                if (role === 'main') {
+                    // Incoming: rotates from -90° (edge on, invisible) to 0° (full face)
+                    const rotateAngle = (1 - cubeEase) * -90; // -90 to 0
+                    const absAngle = Math.abs(rotateAngle);
+                    // cos(angle) gives horizontal compression (1 at 0°, 0 at 90°)
+                    const horizontalScale = Math.cos(absAngle * Math.PI / 180);
+                    // Perspective makes near edge appear larger - slight scale boost
+                    const perspectiveScale = 1 + (cubeEase * 0.05);
+                    return {
+                        scaleX: horizontalScale * perspectiveScale,
+                        scale: perspectiveScale,
+                        translateX: (1 - horizontalScale) * -25, // Slide in from left
+                        brightness: 0.7 + cubeEase * 0.3,
+                        opacity: cubeEase
+                    };
+                } else {
+                    // Outgoing: rotates from 0° (full face) to 90° (edge on, invisible)
+                    const rotateAngle = cubeEase * 90; // 0 to 90
+                    const horizontalScale = Math.cos(rotateAngle * Math.PI / 180);
+                    const perspectiveScale = 1 + ((1 - cubeEase) * 0.05);
+                    return {
+                        scaleX: horizontalScale * perspectiveScale,
+                        scale: perspectiveScale,
+                        translateX: (1 - horizontalScale) * 25, // Slide out to right
+                        brightness: 1 - cubeEase * 0.3,
+                        opacity: 1 - cubeEase
+                    };
+                }
             }
             case 'flip-3d': {
                 const flipEase = easeOutCubic(p);
@@ -1783,12 +1945,39 @@ export class ExportEngine {
                     ? { scaleY: flipEase, brightness: 0.6 + flipEase * 0.4, opacity: flipEase }
                     : { scaleY: 1 - flipEase, brightness: 1 - flipEase * 0.4, opacity: 1 - flipEase };
             }
-            case 'page-curl':
-            case 'page-peel': {
-                const peelEase = easeOutCubic(p);
+            case 'page-curl': {
+                // Match Canvas: Growing triangle from top-left
+                // polygon(0 0, ${p * 150}% 0, 0 ${p * 150}%)
+                const curlSize = p * 150;
                 return role === 'main'
-                    ? { rotate: (1 - peelEase) * -5, opacity: peelEase }
-                    : { brightness: 1 - peelEase * 0.2 };
+                    ? {
+                        clipType: 'polygon',
+                        clipPolygon: [
+                            { x: 0, y: 0 },
+                            { x: curlSize, y: 0 },
+                            { x: 0, y: curlSize }
+                        ]
+                    }
+                    : {};
+            }
+            case 'page-peel': {
+                // Match Canvas: Corner peek effect
+                // polygon(0 0, 100% 0, 100% ${peelSize}%, ${100 - peelSize}% 100%, 0 100%)
+                const peelSize = p * 100;
+                return role === 'main'
+                    ? {
+                        clipType: 'polygon',
+                        clipPolygon: [
+                            { x: 0, y: 0 },
+                            { x: 100, y: 0 },
+                            { x: 100, y: peelSize },
+                            { x: 100 - peelSize, y: 100 },
+                            { x: 0, y: 100 }
+                        ],
+                        rotate: (1 - p) * -5,
+                        brightness: 0.7 + 0.3 * p
+                    }
+                    : { brightness: 1 - p * 0.2 };
             }
 
             // === SHAPES ===
@@ -1839,12 +2028,17 @@ export class ExportEngine {
             }
 
             // === FLASH ===
-            // Note: Flash now includes a scale pulse for split video visibility
+            // Matches Canvas.tsx: brightness flash with smooth opacity
+            // Enhanced with stronger brightness peak for more visible flash effect
             case 'flash': {
-                const scaleFlash = 1 + Math.sin(p * Math.PI) * 0.1;
-                return role === 'outgoing'
-                    ? { opacity: p < 0.5 ? 1 : 0, scale: scaleFlash }
-                    : { opacity: p >= 0.5 ? 1 : 0, scale: scaleFlash };
+                // Calculate flash intensity - peaks at midpoint (p=0.5)
+                // This creates a synchronized bright flash moment
+                const flashPeak = Math.sin(p * Math.PI); // 0→1→0, peaks at 0.5
+                const mainBrightness = 1 + (1 - p) * 5 + flashPeak * 3; // Extra boost at peak
+                const outBrightness = 1 + p * 5 + flashPeak * 3;
+                return role === 'main'
+                    ? { brightness: mainBrightness, opacity: p }
+                    : { brightness: outBrightness, opacity: 1 - p };
             }
             // === BLUR ===
             case 'blur':
@@ -1856,28 +2050,54 @@ export class ExportEngine {
             }
             // === GLITCH ===
             case 'glitch': {
-                // Match Canvas.tsx: hue-rotate, contrast, random offset, hard cut
-                const glitchIntensity = Math.sin(p * Math.PI);
-                const glitchOffset = Math.sin(p * 50) * 10 * glitchIntensity;
-                const scaleGlitch = 1 + (Math.random() * 0.1 - 0.05) * glitchIntensity;
-                if (role === 'outgoing') {
-                    return p > 0.5 ? { opacity: 0 } : { translateX: -glitchOffset, translateY: glitchOffset, hueRotate: p * 90, contrast: 1.5, opacity: 1, scale: scaleGlitch };
-                }
-                return p > 0.5 ? { translateX: glitchOffset, translateY: -glitchOffset, hueRotate: p * 90, contrast: 1.5, opacity: 1, scale: scaleGlitch } : { opacity: 0 };
+                // Glitch effect applies to incoming clip (for postfix transitions)
+                // Incoming: hue-rotate + contrast, appears at start with effect
+                // Outgoing: simple fade out (no glitch effect)
+                return role === 'main'
+                    ? { hueRotate: (1 - p) * 90, contrast: 1.5, opacity: p }  // Incoming with glitch
+                    : { opacity: 1 - p };  // Outgoing just fades out clean
             }
 
             // === STACK ===
             case 'stack':
+                // 3D Stack - Final "Proper 3D" Simulation
+                const stackEase = easeOutCubic(p);
+                // Force horizontal direction
+                const dirX = xMult === 0 ? 1 : (xMult > 0 ? 1 : -1);
+
                 if (role === 'main') {
+                    // Incoming: Swings from -90deg
+                    // Canvas: z=200, persp=600 => scale=600/(600-200) = 1.5
+                    const x = dirX * 80 * (1 - stackEase);
+                    const depthScale = 1 + 0.5 * (1 - stackEase); // 1.5 -> 1.0
+                    const rot = -90 * (1 - stackEase);
+                    const foreshorten = Math.abs(Math.cos(rot * Math.PI / 180));
+
                     return {
-                        translateX: xMult * 100 * outP,
-                        translateY: yMult * 100 * outP,
-                        scale: 0.8 + 0.2 * p,
-                        blur: outP * 3,
-                        opacity: 0.3 + 0.7 * p
+                        translateX: x,
+                        scale: depthScale,
+                        scaleX: depthScale * foreshorten
                     };
                 }
-                return { scale: 1 - p * 0.2, brightness: 1 - p * 0.4, blur: p * 2, opacity: 1 - p * 0.3 };
+
+                // Outgoing: Rotates to 30deg
+                // Canvas: translateZ(-100), persp(600) => scale=600/700 ≈ 0.857
+                // CSS Scale(1->0.8) applied on top
+                const outRot = 30 * p;
+                const outScale = 1 - p * 0.2;
+                const zFactor = 0.857; // Constant depth pushback
+                const totalScale = outScale * zFactor;
+
+                const outForeshorten = Math.abs(Math.cos(outRot * Math.PI / 180));
+
+                return {
+                    scale: totalScale,
+                    scaleX: totalScale * outForeshorten, // Simulate rotation away
+                    brightness: 1 - p * 0.5,
+                    opacity: 1
+                };
+
+
 
             // === MORPH ===
             case 'morph-cut':
@@ -1912,11 +2132,37 @@ export class ExportEngine {
                     : { sepia: p, brightness: 1 + p, opacity: outP };
             }
             case 'luma-dissolve': {
+                // Matches Canvas.tsx: contrast sweep with brightness mapping
                 const lumaP = 1 - Math.pow(1 - p, 2);
-                const lumaScale = 1 + 0.05 * (1 - lumaP);
                 return role === 'main'
-                    ? { brightness: 0.7 + lumaP * 0.3, opacity: lumaP, scale: lumaScale }
-                    : { brightness: 1 - lumaP * 0.3, opacity: 1 - lumaP };
+                    ? { contrast: 1 + lumaP * 1.5, brightness: 0.7 + lumaP * 0.3, opacity: Math.max(0.01, lumaP) }
+                    : { contrast: 1 + (1 - lumaP) * 1.5, brightness: 1 - (1 - lumaP) * 0.3, opacity: Math.max(0.01, 1 - lumaP) };
+            }
+            case 'fade-color': {
+                // Distinctive "fade through warm color" effect
+                // Both clips fade through a sepia/orange tint at the crossover point
+                // Also includes scale shrink/grow and hue shift for unique visual
+                const colorIntensity = Math.sin(p * Math.PI); // 0→1→0, peaks at 0.5
+
+                if (role === 'outgoing') {
+                    return {
+                        sepia: colorIntensity * 0.8,           // Warm sepia tint peaks at middle
+                        brightness: 1 - colorIntensity * 0.3,  // Slightly darker at peak
+                        hueRotate: colorIntensity * 20,        // Subtle hue shift toward orange
+                        scale: 1 - p * 0.1,                    // Shrink as it fades out
+                        opacity: Math.max(0.01, 1 - p)
+                    };
+                }
+                if (role === 'main') {
+                    return {
+                        sepia: colorIntensity * 0.8,           // Same sepia for consistent color
+                        brightness: 1 - colorIntensity * 0.3,  // Darker at peak, brightens to normal
+                        hueRotate: colorIntensity * 20,        // Matching hue shift  
+                        scale: 0.9 + p * 0.1,                  // Grow as it fades in
+                        opacity: Math.max(0.01, p)
+                    };
+                }
+                return {};
             }
 
             // === DIGITAL EFFECTS ===
@@ -1930,14 +2176,33 @@ export class ExportEngine {
                 };
             }
             case 'pixelate': {
-                const pixelScale = 1 + 0.05 * Math.sin(p * Math.PI);
-                return role === 'main' ? { opacity: p, scale: pixelScale } : { opacity: outP };
+                // Pixelate effect: stepping/blocky scale animation with contrast boost
+                // Creates a distinctive "snapping" digital feel
+                const steps = 8;
+                const steppedP = Math.floor(p * steps) / steps; // Create stepping effect
+                const contrastPulse = 1 + Math.sin(p * Math.PI * 3) * 0.15; // Contrast flashes
+                return role === 'main'
+                    ? { opacity: steppedP + 0.1, scale: 0.9 + steppedP * 0.15, contrast: contrastPulse }
+                    : { opacity: 1 - steppedP, scale: 1 + (1 - steppedP) * 0.1 };
             }
             case 'datamosh': {
-                return {
-                    scale: 1 + Math.sin(p * 8) * 0.08,
-                    opacity: role === 'main' ? p : outP
-                };
+                // Datamosh: matches Canvas.tsx preview exactly
+                // scale + skew oscillation + hue-rotate
+                const scaleOsc = 1 + Math.sin(p * 8) * 0.08;
+                const skewOsc = Math.sin(p * 15) * 5; // Oscillating skew like Canvas.tsx
+                return role === 'main'
+                    ? {
+                        scale: scaleOsc,
+                        skew: skewOsc,
+                        hueRotate: p * 30,
+                        opacity: p
+                    }
+                    : {
+                        scale: scaleOsc,
+                        skew: skewOsc,
+                        hueRotate: (1 - p) * 30,
+                        opacity: 1 - p
+                    };
             }
             case 'chromatic-aberration': {
                 const chromScale = 1 + 0.05 * Math.sin(p * Math.PI);
@@ -1959,8 +2224,14 @@ export class ExportEngine {
                 return role === 'main'
                     ? { scaleX: 0.1 + 0.9 * p, opacity: p }
                     : { scaleX: 1 + p, opacity: outP };
-            case 'liquid':
-                return { opacity: role === 'main' ? p : outP };
+            case 'liquid': {
+                // Distinctive liquid wavy/morphing effect - matches Canvas.tsx
+                const liquidWave = Math.sin(p * Math.PI * 3) * 0.05;  // Vertical wave distortion
+                const liquidSkew = Math.sin(p * Math.PI * 2) * 3;    // Horizontal wobble
+                return role === 'main'
+                    ? { scaleY: 1 + liquidWave, skew: liquidSkew, blur: (1 - p) * 4, opacity: p }
+                    : { scaleY: 1 - liquidWave, skew: -liquidSkew, blur: p * 4, opacity: 1 - p };
+            }
 
             // === MOVEMENT ===
             case 'flow':
@@ -3145,7 +3416,14 @@ export class ExportEngine {
         let width: number;
         let height: number;
 
-        if (item.isBackground) {
+        // Check if background is resized (not full-size 100% x 100%)
+        // Resized backgrounds should use item.width/height like overlays
+        const bgWidth = item.width ?? 100;
+        const bgHeight = item.height ?? 100;
+        const isResizedBackground = item.isBackground && (bgWidth !== 100 || bgHeight !== 100);
+
+        if (item.isBackground && !isResizedBackground) {
+            // Full-size background: use fit mode logic
             // Get media aspect ratio for proper fit calculation
             let mediaAspect = 1;
             if (mediaEl) {
@@ -3187,6 +3465,7 @@ export class ExportEngine {
                 }
             }
         } else {
+            // Overlay OR resized background: use item.width/height
             width = item.width ? (item.width / 100) * canvasWidth : canvasWidth * 0.5;
             height = item.height ? (item.height / 100) * canvasHeight : canvasHeight * 0.5;
         }

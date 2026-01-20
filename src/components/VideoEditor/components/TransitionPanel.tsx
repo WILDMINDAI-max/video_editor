@@ -32,7 +32,7 @@ const TransitionPanel: React.FC<TransitionPanelProps> = ({ transition, onUpdate,
         { id: 'dip-to-white', label: 'Dip to White', icon: Maximize, category: 'Dissolve' },
 
         // Slides
-        { id: 'slide', label: 'Slide', icon: Shuffle, category: 'Slide' },
+
         { id: 'push', label: 'Push', icon: ArrowRight, category: 'Slide' },
         { id: 'whip', label: 'Whip', icon: Zap, category: 'Slide' },
         { id: 'split', label: 'Split', icon: Columns, category: 'Slide' },
@@ -61,7 +61,7 @@ const TransitionPanel: React.FC<TransitionPanelProps> = ({ transition, onUpdate,
 
         // Legacy
         { id: 'stack', label: 'Stack', icon: Layers, category: 'Other' },
-        { id: 'flow', label: 'Flow', icon: RotateCcw, category: 'Other' },
+
     ];
 
     const advancedTransitions: { id: TransitionType; label: string; icon: React.ElementType; category?: string }[] = [
@@ -255,7 +255,7 @@ const TransitionPanel: React.FC<TransitionPanelProps> = ({ transition, onUpdate,
                             </div>
 
                             {/* Direction */}
-                            {(['slide', 'push', 'whip', 'split', 'band-slide', 'wipe', 'band-wipe', 'barn-doors', 'venetian-blinds', 'line-wipe', 'match-move', 'flow', 'chop'].includes(currentType)) && (
+                            {(['push', 'whip', 'split', 'band-slide', 'wipe', 'band-wipe', 'barn-doors', 'venetian-blinds', 'line-wipe', 'match-move', 'flow', 'chop'].includes(currentType)) && (
                                 <div className="space-y-3">
                                     <label className="text-xs font-bold text-gray-700 uppercase tracking-wide">Direction</label>
                                     <div className="flex gap-2">

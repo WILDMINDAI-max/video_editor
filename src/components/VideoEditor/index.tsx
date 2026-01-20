@@ -376,7 +376,12 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
     // --- Derived State ---
     const mainTrack = tracks.find(t => t.id === 'main-video');
     const mainTrackDuration = mainTrack?.items.reduce((max, item) => Math.max(max, item.start + item.duration), 0) || 0;
-    const totalDuration = mainTrackDuration > 0 ? mainTrackDuration : 5;
+    // Calculate total duration across ALL tracks (overlays, audio, main video)
+    const allTracksDuration = tracks.reduce((max, track) => {
+        const trackEnd = track.items.reduce((m, item) => Math.max(m, item.start + item.duration), 0);
+        return Math.max(max, trackEnd);
+    }, 0);
+    const totalDuration = allTracksDuration > 0 ? allTracksDuration : 5;
 
     // Helper to get selected item object
     const selectedItem = useMemo(() => {
@@ -405,75 +410,6 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
             setCurrentTime(totalDuration);
         }
     }, [totalDuration, currentTime]);
-
-    // Import generated videos from other app (if any)
-    useEffect(() => {
-        try {
-            if (typeof window === 'undefined') return;
-            const raw = localStorage.getItem('wild_import_videos');
-            console.log('[VideoEditor] checking localStorage for wild_import_videos', !!raw);
-            if (!raw) return;
-            const parsed = JSON.parse(raw);
-            const vids = Array.isArray(parsed?.videos) ? parsed.videos : [];
-            if (vids.length > 0) {
-                console.log('[VideoEditor] found', vids.length, 'videos to import from localStorage');
-                // Add each video to the main track sequentially
-                setTimeout(async () => {
-                    for (const v of vids) {
-                        try {
-                            console.log('[VideoEditor] importing video from localStorage', v);
-                            // Try to fetch the video and convert to blob URL to avoid CORS/media loading issues
-                            try {
-                                const res = await fetch(v, { method: 'GET', mode: 'cors', cache: 'no-cache' });
-                                if (res.ok || res.status === 304) {
-                                    const blob = await res.blob();
-                                    const blobUrl = URL.createObjectURL(blob);
-                                    console.log('[VideoEditor] successfully fetched and added video as blob');
-                                    handleAddClip(blobUrl, 'video');
-                                    continue;
-                                }
-                                console.warn('[VideoEditor] direct fetch returned non-ok for', v, res.status);
-                            } catch (fetchErr) {
-                                console.warn('[VideoEditor] direct fetch failed for', v, fetchErr);
-                            }
-
-                            // Try proxy on workflow app (wild) as same-origin fetch to avoid COEP/CORS
-                            try {
-                                const proxyBase = 'http://localhost:3000/api/proxy/video?url=';
-                                const proxyUrl = proxyBase + encodeURIComponent(v);
-                                const pres = await fetch(proxyUrl);
-                                if (pres.ok) {
-                                    const pblob = await pres.blob();
-                                    const pblobUrl = URL.createObjectURL(pblob);
-                                    console.log('[VideoEditor] successfully fetched via proxy and added video');
-                                    handleAddClip(pblobUrl, 'video');
-                                    continue;
-                                }
-                                console.warn('[VideoEditor] proxy fetch returned non-ok for', v, pres.status);
-                            } catch (proxyErr) {
-                                console.warn('[VideoEditor] proxy fetch failed for', v, proxyErr);
-                            }
-
-                            // Final fallback: add original URL directly
-                            console.log('[VideoEditor] adding video with original URL as fallback');
-                            handleAddClip(v, 'video');
-                        } catch (e) {
-                            console.error('Failed to import video to timeline', e);
-                        }
-                    }
-                }, 50);
-            }
-            // Optionally set project name
-            if (parsed?.projectName) setProjectName(parsed.projectName);
-            // Remove key so import happens only once
-            localStorage.removeItem('wild_import_videos');
-        } catch (e) {
-            console.error('Error importing generated videos from localStorage', e);
-        }
-    }, []);
-
-    // Listen for messages from other windows (workflow -> editor)
-    // NOTE: moved below `handleAddClip` declaration to avoid temporal-dead-zone errors.
 
     // --- Handlers ---
 
@@ -646,211 +582,6 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
         }
     };
 
-    // PRIORITY 0: Check URL Hash for import payload (Bypasses ALL cross-origin restrictions)
-    useEffect(() => {
-        try {
-            if (typeof window === 'undefined') return;
-            const hash = window.location.hash;
-            if (hash && hash.startsWith('#wild_import=')) {
-                console.log('[VideoEditor] found wild_import hash payload');
-                const jsonStr = decodeURIComponent(hash.substring('#wild_import='.length));
-                try {
-                    const data = JSON.parse(jsonStr);
-                    if (data && Array.isArray(data.videos)) {
-                        const vids: string[] = data.videos;
-                        console.log('[VideoEditor] ✅ IMPORTING', vids.length, 'videos from URL Hash');
-
-                        setTimeout(async () => {
-                            for (const v of vids) {
-                                try {
-                                    console.log('[VideoEditor] processing video from Hash:', v.substring(0, 50) + '...');
-                                    handleAddClip(v, 'video');
-                                    // Small delay to ensure order
-                                    await new Promise(r => setTimeout(r, 100));
-                                } catch (err) {
-                                    console.error('[VideoEditor] failed to import video from Hash', err);
-                                }
-                            }
-                            console.log('[VideoEditor] ✅ finished importing all videos from Hash');
-                            // Clear hash to generally clean up URL, but keep it if user refreshes
-                            // window.location.hash = ''; 
-                        }, 500); // Wait for editor to fully init
-                    }
-                } catch (parseErr) {
-                    console.error('[VideoEditor] failed to parse hash payload', parseErr);
-                }
-            }
-        } catch (e) {
-            console.error('[VideoEditor] Error checking URL hash', e);
-        }
-    }, [handleAddClip]);
-
-    // Listen for BroadcastChannel messages (most reliable for cross--window communication)
-    useEffect(() => {
-        try {
-            console.log('[VideoEditor] setting up BroadcastChannel listener');
-            const channel = new BroadcastChannel('wild_editor_channel');
-
-            channel.onmessage = (event) => {
-                console.log('[VideoEditor] received BroadcastChannel message:', event.data);
-                const data = event.data;
-
-                if (data && data.type === 'wild_import_videos' && data.payload && Array.isArray(data.payload.videos)) {
-                    const vids: any[] = data.payload.videos;
-                    console.log('[VideoEditor] ✅ IMPORTING', vids.length, 'videos from BroadcastChannel');
-
-                    setTimeout(async () => {
-                        for (const v of vids) {
-                            try {
-                                console.log('[VideoEditor] processing video from BroadcastChannel:', typeof v === 'string' ? v.substring(0, 50) + '...' : 'Blob');
-
-                                // If it's a blob URL, add it directly
-                                if (typeof v === 'string' && v.startsWith('blob:')) {
-                                    console.log('[VideoEditor] adding blob URL directly');
-                                    handleAddClip(v, 'video');
-                                    continue;
-                                }
-
-                                // Otherwise try to add as-is
-                                console.log('[VideoEditor] adding video as-is');
-                                handleAddClip(v as string, 'video');
-                            } catch (err) {
-                                console.error('[VideoEditor] failed to import video from BroadcastChannel', err);
-                            }
-                        }
-                        console.log('[VideoEditor] ✅ finished importing all videos from BroadcastChannel');
-                    }, 50);
-                }
-            };
-
-            console.log('[VideoEditor] BroadcastChannel listener registered');
-
-            return () => {
-                console.log('[VideoEditor] closing BroadcastChannel');
-                channel.close();
-            };
-        } catch (e) {
-            console.error('[VideoEditor] BroadcastChannel setup failed', e);
-        }
-    }, [handleAddClip]);
-
-    // Listen for messages from other windows (workflow -> editor)
-    useEffect(() => {
-        console.log('[VideoEditor] setting up postMessage listener');
-        const handler = (ev: MessageEvent) => {
-            try {
-                console.log('[VideoEditor] received message event:', {
-                    origin: ev.origin,
-                    type: ev.data?.type,
-                    hasData: !!ev.data,
-                    hasPayload: !!(ev.data?.payload),
-                    videosCount: ev.data?.payload?.videos?.length
-                });
-
-                const allowedOrigins = [
-                    'http://localhost:3000',
-                    'http://127.0.0.1:3000',
-                    'http://localhost:3001',
-                    window.location.origin
-                ];
-                // In dev allow messages from local hosts; adjust as needed in production
-
-                const data = ev.data;
-                if (!data) {
-                    console.log('[VideoEditor] no data in message, ignoring');
-                    return;
-                }
-
-                if (data.type === 'wild_import_videos' && data.payload && Array.isArray(data.payload.videos)) {
-                    const vids: any[] = data.payload.videos;
-                    console.log('[VideoEditor] ✅ IMPORTING', vids.length, 'videos from postMessage');
-                    // Import each video into timeline
-                    setTimeout(async () => {
-                        for (const v of vids) {
-                            try {
-                                console.log('[VideoEditor] processing video:', typeof v === 'string' ? v.substring(0, 50) + '...' : 'Blob');
-                                // If v is a Blob (structured clone from opener), create an object URL directly
-                                try {
-                                    if (v && typeof v === 'object' && v instanceof Blob) {
-                                        const blobUrl = URL.createObjectURL(v);
-                                        console.log('[VideoEditor] adding video from Blob via postMessage');
-                                        handleAddClip(blobUrl, 'video');
-                                        continue;
-                                    }
-                                } catch (blobCheckErr) {
-                                    // ignore and fallback to treating v as URL
-                                }
-
-                                // Otherwise, treat v as a URL string and try to fetch it to create blob URL (CORS-aware)
-                                if (typeof v === 'string') {
-                                    // If it's already a blob URL, just add it directly
-                                    if (v.startsWith('blob:')) {
-                                        console.log('[VideoEditor] adding blob URL directly:', v.substring(0, 50) + '...');
-                                        handleAddClip(v, 'video');
-                                        continue;
-                                    }
-
-                                    try {
-                                        const res = await fetch(v, { method: 'GET', mode: 'cors', cache: 'no-cache' });
-                                        if (res.ok || res.status === 304) {
-                                            const blob = await res.blob();
-                                            const blobUrl = URL.createObjectURL(blob);
-                                            console.log('[VideoEditor] successfully fetched video from URL via postMessage');
-                                            handleAddClip(blobUrl, 'video');
-                                            continue;
-                                        }
-                                        console.warn('[VideoEditor] postMessage fetch returned non-ok for', v, res.status);
-                                    } catch (fetchErr) {
-                                        console.warn('[VideoEditor] postMessage fetch failed for', v, fetchErr);
-                                    }
-                                }
-
-                                // Final fallback: add original value (likely URL string) directly
-                                console.log('[VideoEditor] adding video with original value as fallback via postMessage');
-                                handleAddClip(v as string, 'video');
-                            } catch (err) {
-                                console.error('Import via postMessage failed for video', v, err);
-                            }
-                        }
-                        console.log('[VideoEditor] ✅ finished importing all videos from postMessage');
-                    }, 50);
-                } else {
-                    console.log('[VideoEditor] message type:', data.type, '(not wild_import_videos or invalid payload)');
-                }
-            } catch (e) {
-                console.error('Error handling postMessage import', e);
-            }
-        };
-
-        window.addEventListener('message', handler);
-        console.log('[VideoEditor] postMessage listener registered');
-        return () => {
-            console.log('[VideoEditor] removing postMessage listener');
-            window.removeEventListener('message', handler);
-        };
-    }, [handleAddClip]);
-
-    // If opened via window.open from the workflow, send a ready handshake so the opener can post the payload.
-    useEffect(() => {
-        try {
-            if (typeof window === 'undefined') return;
-            console.log('[VideoEditor] checking for opener...');
-            if (window.opener && !window.opener.closed) {
-                try {
-                    console.log('[VideoEditor] opener detected, sending wild_editor_ready');
-                    window.opener.postMessage({ type: 'wild_editor_ready' }, '*');
-                    console.log('[VideoEditor] posted wild_editor_ready to opener');
-                } catch (e) {
-                    console.warn('[VideoEditor] failed to post ready message to opener', e);
-                }
-            } else {
-                console.log('[VideoEditor] no opener detected or opener is closed');
-            }
-        } catch (e) {
-            console.error('[VideoEditor] error in ready handshake', e);
-        }
-    }, []);
-
     const handleUpdateClip = (trackId: string, updatedItem: TimelineItem, skipHistory = false) => {
         if (!skipHistory) addToHistory();
         setTracks(prev => prev.map(track => {
@@ -1008,7 +739,12 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
                 }
                 return track;
             });
-            return newTracks;
+
+            // Clean up empty overlay tracks (don't remove main or audio)
+            return newTracks.filter(t => {
+                if (t.id === 'main-video' || t.id === 'audio') return true;
+                return t.items.length > 0;
+            });
         });
 
         // Update selection to new track/item
@@ -1085,17 +821,17 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
             if (item.isBackground) {
                 // Detach: Create new Overlay Track
                 const newTrackId = `track-${Date.now()}`;
+                // Set width to 40%, height will be auto-calculated based on aspect ratio
                 const newItem: TimelineItem = {
                     ...item,
                     trackId: newTrackId,
                     isBackground: false,
-                    width: 50,
-                    height: undefined,
+                    width: 40,
+                    height: undefined, // Let auto-height calculation handle this based on aspect ratio
                     x: 0,
                     y: 0,
                     layer: 10
                 };
-
                 const newTrack: Track = {
                     id: newTrackId,
                     type: 'overlay',
@@ -1377,6 +1113,72 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
                     return newTracks;
                 });
             }
+        }
+    };
+
+    // Handle files dropped from system (Windows Explorer)
+    const handleDropFiles = async (trackId: string, time: number, files: FileList) => {
+        const targetTrack = tracks.find(t => t.id === trackId);
+        if (!targetTrack) return;
+
+        let currentDropTime = time;
+
+        for (const file of Array.from(files)) {
+            const url = URL.createObjectURL(file);
+            const fileType = file.type.startsWith('image/') ? 'image'
+                : file.type.startsWith('video/') ? 'video'
+                    : file.type.startsWith('audio/') ? 'audio'
+                        : null;
+
+            if (!fileType) continue;
+
+            let thumbnail: string | undefined;
+            let duration = 5; // Default for images
+            let durationStr: string | undefined;
+
+            // Process based on file type
+            if (fileType === 'video') {
+                try {
+                    const result = await generateVideoThumbnail(file);
+                    thumbnail = result.thumbnail;
+                    duration = result.duration;
+                    durationStr = formatDuration(result.duration);
+                } catch (err) {
+                    console.error('Failed to generate video thumbnail', err);
+                }
+            } else if (fileType === 'audio') {
+                try {
+                    duration = await getAudioDuration(file);
+                    durationStr = formatDuration(duration);
+                } catch (err) {
+                    console.error('Failed to get audio duration', err);
+                }
+            }
+
+            // Add to uploads panel
+            setUploads(prev => [{
+                id: Math.random().toString(36).substr(2, 9),
+                type: fileType,
+                src: url,
+                name: file.name,
+                thumbnail,
+                duration: durationStr
+            }, ...prev]);
+
+            // Create timeline item data
+            const itemData = {
+                type: fileType,
+                src: url,
+                name: file.name,
+                thumbnail,
+                duration
+            };
+
+            // Drop the clip using existing handler
+            handleDropClip(trackId, currentDropTime, itemData);
+
+            // Offset next file's drop time
+            currentDropTime += duration;
         }
     };
 
@@ -1802,6 +1604,7 @@ const VideoEditor: React.FC<VideoEditorProps> = () => {
                                 onDetach={handleDetachBackground}
                                 onMoveClip={handleMoveClip}
                                 onDropClip={handleDropClip}
+                                onDropFiles={handleDropFiles}
                                 onClipDragEnd={handleClipDragEnd}
                             />
                         </div>

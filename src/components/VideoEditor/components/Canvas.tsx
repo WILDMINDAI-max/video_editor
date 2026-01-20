@@ -323,7 +323,12 @@ const Canvas: React.FC<CanvasProps> = ({
         e.stopPropagation();
         onSelectClip(item.trackId, item.id);
         if (interactionMode === 'erase') { handleEraserMouseDown(e, item); return; }
-        if (item.isLocked || item.isBackground || isResizing || isRotating || isEditingText) return;
+        // Allow dragging for resized backgrounds (not 100% x 100%)
+        // Treat undefined width/height as 100 (full size)
+        const bgWidth = item.width ?? 100;
+        const bgHeight = item.height ?? 100;
+        const isFullSizeBackground = item.isBackground && bgWidth === 100 && bgHeight === 100;
+        if (item.isLocked || isFullSizeBackground || isResizing || isRotating || isEditingText) return;
 
         // Handle Double Click for Text to Edit
         if (item.type === 'text' && e.detail === 2) {
@@ -380,13 +385,30 @@ const Canvas: React.FC<CanvasProps> = ({
         const deltaX = (localDeltaXPixels / rect.width) * 100;
         const deltaY = (localDeltaYPixels / rect.height) * 100;
 
+        // For images/videos, get aspect ratio to maintain while resizing (corner handles)
+        let aspectRatio: number | null = null;
+        if (item.type === 'image' || item.type === 'video') {
+            const mediaEl = mediaRefs.current[item.id];
+            if (mediaEl) {
+                if (mediaEl instanceof HTMLVideoElement && mediaEl.videoWidth) {
+                    aspectRatio = mediaEl.videoWidth / mediaEl.videoHeight;
+                } else if (mediaEl instanceof HTMLImageElement && mediaEl.naturalWidth) {
+                    aspectRatio = mediaEl.naturalWidth / mediaEl.naturalHeight;
+                }
+            }
+            // Fallback: use current width/height ratio
+            if (!aspectRatio && originalWidth && originalHeight) {
+                const canvasAspect = dimension.width / dimension.height;
+                aspectRatio = (originalWidth / originalHeight) * canvasAspect;
+            }
+        }
+
         let newW = originalWidth; let newH = originalHeight;
         let dCenterXPixels = 0; let dCenterYPixels = 0;
 
         // Calculate new dimensions and center shift (in pixels) based on handle
         if (handle.includes('e')) {
             newW = Math.max(1, originalWidth + deltaX);
-            // We use the actual change in width (converted to pixels) to determine shift
             const actualDeltaXPixels = ((newW - originalWidth) / 100) * rect.width;
             dCenterXPixels = actualDeltaXPixels / 2;
         } else if (handle.includes('w')) {
@@ -405,6 +427,21 @@ const Canvas: React.FC<CanvasProps> = ({
             dCenterYPixels = -actualDeltaYPixels / 2;
         }
 
+        // If aspect ratio is locked (for images/videos), adjust height based on width
+        // ONLY for corner handles - edge handles allow free resize
+        if (aspectRatio && handle.length === 2) { // Corner handle only (nw, ne, sw, se)
+            const canvasAspect = dimension.width / dimension.height;
+            newH = (newW / aspectRatio) * canvasAspect;
+            // Recalculate Y center shift based on new height
+            const actualDeltaYPixels = ((newH - originalHeight) / 100) * rect.height;
+            if (handle.includes('s')) {
+                dCenterYPixels = actualDeltaYPixels / 2;
+            } else if (handle.includes('n')) {
+                dCenterYPixels = -actualDeltaYPixels / 2;
+            }
+        }
+        // Edge handles (e, w, n, s) - free resize, no aspect ratio lock
+
         // Rotate the center shift vector back to world space (pixels)
         const worldShiftXPixels = dCenterXPixels * cos - dCenterYPixels * sin;
         const worldShiftYPixels = dCenterXPixels * sin + dCenterYPixels * cos;
@@ -413,9 +450,7 @@ const Canvas: React.FC<CanvasProps> = ({
         const worldShiftX = (worldShiftXPixels / rect.width) * 100;
         const worldShiftY = (worldShiftYPixels / rect.height) * 100;
 
-        // For text, if we resize height, we might want to unset auto-height behavior or just let it clip/scroll?
-        // Usually text boxes in design tools: width changes wrapping, height changes cropping or spacing.
-        // For now, we update height. If it was auto, it will now be fixed % which is fine.
+        // For text, don't set height (let it auto-size). For images/videos, always set height.
         onUpdateClip(track.id, { ...item, width: newW, height: item.type === 'text' ? undefined : newH, x: originalX + worldShiftX, y: originalY + worldShiftY }, true);
     };
 
@@ -620,6 +655,12 @@ const Canvas: React.FC<CanvasProps> = ({
                     if (isBuffered) return;
                     if (item.type !== 'video' && item.type !== 'image') return;
 
+                    // Skip overlay items - they need DOM for positioning and resize handles
+                    if (!item.isBackground) return;
+
+                    // Skip resized backgrounds - they need DOM for correct sizing
+                    if (item.width !== 100 || item.height !== 100) return;
+
                     // Skip animated items - they need DOM for CSS animations
                     if (item.animation) return;
 
@@ -677,6 +718,12 @@ const Canvas: React.FC<CanvasProps> = ({
                 // PERFORMANCE: When GPU is ready, skip NON-ANIMATED, NON-TRANSITIONING video/image - they're rendered via WebGL
                 // IMPORTANT: Animated or transitioning videos/images stay in DOM so CSS effects work
                 if (gpuReady && !item.animation && !transition && (type === 'video' || type === 'image')) return;
+
+                // Skip overlay items - they render in DOM for positioning and resize
+                if (!item.isBackground && (type === 'video' || type === 'image')) return;
+
+                // Skip resized backgrounds - they render in DOM for correct sizing
+                if (item.isBackground && (item.width !== 100 || item.height !== 100)) return;
 
                 const mediaEl = mediaRefs.current[item.id];
                 if (!mediaEl) return;
@@ -1075,9 +1122,14 @@ const Canvas: React.FC<CanvasProps> = ({
 
     const getItemPositionAndTransform = (item: TimelineItem) => {
         const crop = (interactionMode === 'crop' && selectedItemId === item.id) ? cropState : (item.crop || { x: 50, y: 50, zoom: 1 });
+        // Determine if background is full-size (100% x 100%) or resized
+        const bgWidth = item.width ?? 100;
+        const bgHeight = item.height ?? 100;
+        const isFullSizeBg = item.isBackground && bgWidth === 100 && bgHeight === 100;
 
-        let left: string | number | undefined = item.isBackground ? 0 : `${50 + (item.x || 0)}%`;
-        let top: string | number | undefined = item.isBackground ? 0 : `${50 + (item.y || 0)}%`;
+        // Full-size backgrounds stay at 0,0; resized backgrounds can be positioned like overlays
+        let left: string | number | undefined = isFullSizeBg ? 0 : `${50 + (item.x || 0)}%`;
+        let top: string | number | undefined = isFullSizeBg ? 0 : `${50 + (item.y || 0)}%`;
         let right: string | number | undefined = undefined;
         let bottom: string | number | undefined = undefined;
         let tx = '-50%';
@@ -1092,7 +1144,8 @@ const Canvas: React.FC<CanvasProps> = ({
         }
 
         const transforms = [];
-        if (!item.isBackground) transforms.push(`translate(${tx}, ${ty})`);
+        // Apply translate for overlays and resized backgrounds
+        if (!isFullSizeBg) transforms.push(`translate(${tx}, ${ty})`);
         if (item.flipH) transforms.push('scaleX(-1)');
         if (item.flipV) transforms.push('scaleY(-1)');
         if (item.rotation) transforms.push(`rotate(${item.rotation}deg)`);
@@ -1119,156 +1172,242 @@ const Canvas: React.FC<CanvasProps> = ({
         switch (type) {
             // --- Dissolves ---
             case 'dissolve':
-                // Professional cross-dissolve with gamma correction (like Premiere Pro)
-                const dissolveEase = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+                // Cinematic soft-focus dissolve with blur, scale, and desaturation
+                // Creates a dreamy, film-like dissolve distinct from simple cross-fade
+                const dissolveEase = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; // Quadratic ease in-out
+                const dissolveBlur = Math.sin(p * Math.PI) * 4; // Peaks at midpoint (0→4→0)
+                const dissolveSat = 1 - Math.sin(p * Math.PI) * 0.3; // Desaturates at midpoint
+                const dissolveScale = 1 + Math.sin(p * Math.PI) * 0.03; // Subtle scale pulse
                 if (role === 'main') {
                     return {
                         opacity: Math.max(0.01, dissolveEase),
-                        filter: `brightness(${0.98 + dissolveEase * 0.02})`,
+                        filter: `blur(${dissolveBlur * (1 - dissolveEase)}px) saturate(${dissolveSat}) brightness(${0.95 + dissolveEase * 0.05})`,
+                        transform: `scale(${dissolveScale})`,
                         zIndex: 20
                     };
                 } else {
                     return {
                         opacity: Math.max(0.01, 1 - dissolveEase),
-                        filter: `brightness(${1 - (1 - dissolveEase) * 0.02})`,
+                        filter: `blur(${dissolveBlur * dissolveEase}px) saturate(${dissolveSat}) brightness(${1 - dissolveEase * 0.05})`,
+                        transform: `scale(${dissolveScale})`,
                         zIndex: 10
                     };
                 }
             case 'film-dissolve':
-                // Film-style dissolve with grain, saturation, and sepia (like Premiere Pro Film Dissolve)
+                // Unique film-style dissolve with warm light flash and exposure bloom
+                // Creates a vintage film look with light leak and color temperature shift
                 const filmP = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-                const grain = Math.sin(p * 100) * 0.015; // Simulated film grain
+                const lightFlash = Math.sin(p * Math.PI) * 1.5; // Exposure flash peaks at midpoint
+                const warmShift = Math.sin(p * Math.PI) * 15; // Warm hue-rotate at midpoint
+                const filmScale = 1 + Math.sin(p * Math.PI) * 0.05; // Subtle zoom pulse
+                const filmSepia = Math.sin(p * Math.PI) * 0.25; // Strong sepia at midpoint
                 if (role === 'main') {
                     return {
                         opacity: Math.max(0.01, filmP),
-                        filter: `contrast(${1.05 + grain}) saturate(${0.95 + filmP * 0.05}) sepia(${(1 - filmP) * 0.08})`,
+                        filter: `brightness(${1 + lightFlash * (1 - filmP)}) sepia(${filmSepia}) hue-rotate(${warmShift}deg) contrast(${1.1})`,
+                        transform: `scale(${filmScale})`,
                         zIndex: 20
                     };
                 } else {
                     return {
                         opacity: Math.max(0.01, 1 - filmP),
-                        filter: `contrast(${1.05 + grain}) saturate(${1 - (1 - filmP) * 0.05}) sepia(${filmP * 0.08})`,
+                        filter: `brightness(${1 + lightFlash * filmP}) sepia(${filmSepia}) hue-rotate(${warmShift}deg) contrast(${1.1})`,
+                        transform: `scale(${filmScale})`,
                         zIndex: 10
                     };
                 }
             case 'additive-dissolve':
-                return role === 'main'
-                    ? { opacity: p, mixBlendMode: 'plus-lighter' as any }
-                    : { opacity: 1 - p, mixBlendMode: 'plus-lighter' as any };
+                // Overexposed white wash with color inversion flash
+                // Creates a bright "blown out" transition like overexposed film
+                const addP = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+                const whiteWash = Math.sin(p * Math.PI) * 4; // Extreme brightness at midpoint
+                const invertAmount = Math.sin(p * Math.PI) * 100; // Invert colors at peak
+                const desatAmount = 1 - Math.sin(p * Math.PI) * 0.8; // Wash out colors
+                if (role === 'main') {
+                    return {
+                        opacity: Math.max(0.01, addP),
+                        filter: `brightness(${1 + whiteWash * (1 - addP)}) invert(${invertAmount * (1 - addP)}%) saturate(${desatAmount}) contrast(${1.3 - addP * 0.3})`,
+                        zIndex: 20
+                    };
+                } else {
+                    return {
+                        opacity: Math.max(0.01, 1 - addP),
+                        filter: `brightness(${1 + whiteWash * addP}) invert(${invertAmount * addP}%) saturate(${desatAmount}) contrast(${1 + addP * 0.3})`,
+                        zIndex: 10
+                    };
+                }
             case 'dip-to-black':
-                // Professional dip-to-black (like Premiere Pro): fade to black, then fade from black
+                // Premiere Pro Dip to Black: Clip A darkens to pure black, then Clip B emerges from black
+                // First half: Clip A darkens (brightness decreases) while fading
+                // Middle: Full black frame
+                // Second half: Clip B brightens from black while fading in
                 if (role === 'outgoing') {
+                    // Clip A: darkens towards black in first half
                     if (p < 0.5) {
-                        const fadeOut = p * 2; // 0 -> 1 in first half
-                        const easeOut = Math.pow(fadeOut, 2); // Quadratic ease-in
+                        const t = p * 2; // 0 → 1 in first half
+                        // Darken towards black: decrease brightness, maintain saturation initially then reduce
                         return {
-                            opacity: Math.max(0.05, 1 - easeOut),
-                            filter: `brightness(${1 - fadeOut * 0.6})`, // Darken while fading
+                            opacity: 1,
+                            filter: `brightness(${1 - t}) contrast(${1 - t * 0.3}) saturate(${1 - t * 0.5})`,
                             zIndex: 10
                         };
                     } else {
-                        return { opacity: 0.05, zIndex: 10 };
+                        return { opacity: 0, zIndex: 10 }; // Hidden in second half
                     }
                 }
                 if (role === 'main') {
+                    // Clip B: emerges from black in second half
                     if (p > 0.5) {
-                        const fadeIn = (p - 0.5) * 2; // 0 -> 1 in second half
-                        const easeIn = 1 - Math.pow(1 - fadeIn, 2); // Quadratic ease-out
+                        const t = (p - 0.5) * 2; // 0 → 1 in second half
+                        // Brighten from black: start very dark, normalize to normal
                         return {
-                            opacity: Math.max(0.05, easeIn),
-                            filter: `brightness(${0.4 + fadeIn * 0.6})`, // Brighten from dark
+                            opacity: t,
+                            filter: `brightness(${t}) contrast(${0.7 + t * 0.3}) saturate(${0.5 + t * 0.5})`,
                             zIndex: 20
                         };
                     } else {
-                        return { opacity: 0.05, zIndex: 20 };
+                        return { opacity: 0, zIndex: 20 }; // Hidden during first half
                     }
                 }
                 return {};
             case 'dip-to-white':
-                // Professional dip-to-white (like Premiere Pro): flash to white, then fade from white
+                // Premiere Pro Dip to White: Clip A brightens to pure white, then Clip B fades in from white
+                // Formula: output = clip * (1 - t) + 255 * t (fade to white)
+                // Uses brightness to simulate blend towards white
+                // First half: Clip A → white (brightness increases, saturation decreases)
+                // Middle: Full white frame
+                // Second half: Clip B fades in from white (high brightness that normalizes)
                 if (role === 'outgoing') {
+                    // Clip A: brightens towards white in first half
                     if (p < 0.5) {
-                        const fadeOut = p * 2; // 0 -> 1 in first half
-                        const easeOut = Math.pow(fadeOut, 1.5); // Ease-in (faster than quadratic)
+                        const t = p * 2; // 0 → 1 in first half
+                        // Blend towards white: increase brightness dramatically, reduce contrast/saturation
                         return {
-                            opacity: 1 - easeOut,
-                            filter: `brightness(${1 + fadeOut * 1.5}) saturate(${1 - fadeOut * 0.7}) contrast(${1 - fadeOut * 0.2})`,
+                            opacity: 1,
+                            filter: `brightness(${1 + t * 4}) contrast(${1 - t * 0.5}) saturate(${1 - t})`,
                             zIndex: 10
                         };
                     } else {
-                        return { opacity: 0.05, filter: 'brightness(2.5) saturate(0.3)', zIndex: 10 };
+                        return { opacity: 0, zIndex: 10 }; // Hidden in second half (white overlay shows)
                     }
                 }
                 if (role === 'main') {
+                    // Clip B: emerges from white in second half
                     if (p > 0.5) {
-                        const fadeIn = (p - 0.5) * 2; // 0 -> 1 in second half
-                        const easeIn = 1 - Math.pow(1 - fadeIn, 1.5); // Ease-out
+                        const t = (p - 0.5) * 2; // 0 → 1 in second half
+                        // Fade from white: start very bright, normalize to normal
                         return {
-                            opacity: Math.max(0.05, easeIn),
-                            filter: `brightness(${2.5 - fadeIn * 1.5}) saturate(${0.3 + fadeIn * 0.7}) contrast(${0.8 + fadeIn * 0.2})`,
+                            opacity: t,
+                            filter: `brightness(${5 - t * 4}) contrast(${0.5 + t * 0.5}) saturate(${t})`,
                             zIndex: 20
                         };
                     } else {
-                        return { opacity: 0.05, filter: 'brightness(2.5) saturate(0.3)', zIndex: 20 };
+                        return { opacity: 0, zIndex: 20 }; // Hidden during first half
                     }
                 }
                 return {};
 
             // --- Slides & Pushes ---
             case 'slide':
-                // Ultra-light slide - crystal clear video
-                if (role === 'main') {
+                // Slide (Uncover): Outgoing clip slides AWAY, revealing the stationary incoming clip underneath
+                // This is the opposite of 'Cover' - creates a distinct "Uncover" reveal effect
+                if (role === 'outgoing') {
+                    const slideEase = 1 - Math.pow(1 - p, 3); // Cubic ease-out
                     return {
-                        transform: `translate(${xMult * 100 * (1 - p)}%, ${yMult * 100 * (1 - p)}%)`,
+                        // Outgoing moves OUT (Slide Out) - stays ON TOP
+                        transform: `translate(${xMult * -100 * p}%, ${yMult * -100 * p}%)`,
+                        boxShadow: '0 0 50px rgba(0,0,0,0.8)', // Shadow on OUTGOING as it's on top
                         zIndex: 20
                     };
                 } else {
-                    return { zIndex: 10 };
+                    // Incoming is stationary underneath, waiting to be revealed
+                    return {
+                        transform: 'none',
+                        filter: `brightness(${0.5 + p * 0.5})`, // Brightens as it's revealed
+                        zIndex: 10 // Incoming is BEHIND
+                    };
                 }
             case 'push':
-                // Ultra-optimized push (no blur for 8K performance)
+                // Push: Both clips move TOGETHER as if connected (like pushing paper)
+                // No overlap - they move in sync, outgoing exits as incoming enters
+                const pushEase = 1 - Math.pow(1 - p, 2); // Quadratic ease-out
                 return role === 'main'
-                    ? { transform: `translate(${xMult * 100 * (1 - p)}%, ${yMult * 100 * (1 - p)}%)` }
-                    : { transform: `translate(${xMult * -100 * p}%, ${yMult * -100 * p}%)` };
+                    ? {
+                        transform: `translate(${xMult * 100 * (1 - pushEase)}%, ${yMult * 100 * (1 - pushEase)}%)`,
+                        zIndex: 20
+                    }
+                    : {
+                        transform: `translate(${xMult * -100 * pushEase}%, ${yMult * -100 * pushEase}%)`,
+                        zIndex: 10
+                    };
             case 'whip':
-                // Ultra-optimized whip (no blur for 8K performance)
-                return role === 'main'
-                    ? { transform: `translate(${xMult * 100 * (1 - p)}%, ${yMult * 100 * (1 - p)}%)` }
-                    : { transform: `translate(${xMult * -100 * p}%, ${yMult * -100 * p}%)` };
+                // Whip: High-speed pan with heavy directional blur
+                // Uses exponential ease-in-out for a 'snap' effect and strong blur at peak speed
+                if (role === 'main') {
+                    // Incoming snaps in
+                    const whipEase = p < 0.5 ? 8 * p * p * p * p : 1 - Math.pow(-2 * p + 2, 4) / 2;
+                    // Blur peaks in middle (p=0.5)
+                    const blurAmount = Math.sin(p * Math.PI) * 20;
+                    return {
+                        transform: `translate(${xMult * 100 * (1 - whipEase)}%, ${yMult * 100 * (1 - whipEase)}%) scale(${1 + blurAmount * 0.005})`,
+                        filter: `blur(${blurAmount}px) brightness(${1 + blurAmount * 0.01})`,
+                        zIndex: 20
+                    };
+                } else {
+                    // Outgoing snaps out
+                    const whipEase = p < 0.5 ? 8 * p * p * p * p : 1 - Math.pow(-2 * p + 2, 4) / 2;
+                    const blurAmount = Math.sin(p * Math.PI) * 20;
+                    return {
+                        transform: `translate(${xMult * -100 * whipEase}%, ${yMult * -100 * whipEase}%) scale(${1 + blurAmount * 0.005})`,
+                        filter: `blur(${blurAmount}px) brightness(${1 + blurAmount * 0.01})`,
+                        zIndex: 10
+                    };
+                }
             case 'split':
-                // Incoming splits from center (simulated as simple slide for now or clip)
-                // Better: Clip path split
+                // Split from center - Now matches ExportEngine orientation and scale
+                const easeS = 1 - Math.pow(1 - p, 3);
+                const scaleSplit = 1 + 0.08 * (1 - easeS);
                 return role === 'main'
-                    ? { clipPath: `inset(${direction === 'up' || direction === 'down' ? `0 ${50 * (1 - p)}% 0 ${50 * (1 - p)}%` : `${50 * (1 - p)}% 0 ${50 * (1 - p)}% 0`})`, zIndex: 20 }
+                    ? {
+                        // If Up/Down, inset Top/Bottom (reveal vertical height). If Left/Right, inset Left/Right (reveal horizontal width).
+                        clipPath: `inset(${direction === 'up' || direction === 'down' ? `${50 * (1 - easeS)}% 0 ${50 * (1 - easeS)}% 0` : `0 ${50 * (1 - easeS)}% 0 ${50 * (1 - easeS)}%`})`,
+                        transform: `scale(${scaleSplit})`,
+                        zIndex: 20
+                    }
                     : { zIndex: 10 };
+
             case 'band-slide':
-                // Slide strips (simplified to push for now)
+                // Slide strips
                 return role === 'main' ? { transform: `translate(${xMult * 100 * (1 - p)}%, ${yMult * 100 * (1 - p)}%)` } : { transform: `translate(${xMult * -100 * p}%, ${yMult * -100 * p}%)` };
 
             // --- Iris Shapes ---
             case 'iris-box':
                 // Box iris with easing curve
                 const easeBox = 1 - Math.pow(1 - p, 3);
+                const scaleBox = 1 + 0.08 * (1 - easeBox);
                 return role === 'main'
-                    ? { clipPath: `inset(${50 * (1 - easeBox)}%)`, filter: `brightness(${0.7 + 0.3 * p})`, zIndex: 20 }
+                    ? { clipPath: `inset(${50 * (1 - easeBox)}%)`, filter: `brightness(${0.7 + 0.3 * p})`, transform: `scale(${scaleBox})`, zIndex: 20 }
                     : { filter: `brightness(${1 - p * 0.3})`, zIndex: 10 };
             case 'iris-round':
             case 'circle':
                 // Circular iris with smooth easing
                 const easeCircle = 1 - Math.pow(1 - p, 3);
+                const scaleCircle = 1 + 0.1 * (1 - easeCircle);
                 return role === 'main'
-                    ? { clipPath: `circle(${easeCircle * 75}% at 50% 50%)`, filter: `brightness(${0.7 + 0.3 * p})`, zIndex: 20 }
+                    ? { clipPath: `circle(${easeCircle * 75}% at 50% 50%)`, filter: `brightness(${0.7 + 0.3 * p})`, transform: `scale(${scaleCircle})`, zIndex: 20 }
                     : { filter: `brightness(${1 - p * 0.3})`, zIndex: 10 };
             case 'iris-diamond':
                 // Diamond iris with easing
                 const easeDiamond = 1 - Math.pow(1 - p, 3);
+                const scaleDiamond = 1 + 0.08 * (1 - easeDiamond);
                 return role === 'main'
-                    ? { clipPath: `polygon(50% ${50 - 50 * easeDiamond}%, ${50 + 50 * easeDiamond}% 50%, 50% ${50 + 50 * easeDiamond}%, ${50 - 50 * easeDiamond}% 50%)`, filter: `brightness(${0.7 + 0.3 * p})`, zIndex: 20 }
+                    ? { clipPath: `polygon(50% ${50 - 50 * easeDiamond}%, ${50 + 50 * easeDiamond}% 50%, 50% ${50 + 50 * easeDiamond}%, ${50 - 50 * easeDiamond}% 50%)`, filter: `brightness(${0.7 + 0.3 * p})`, transform: `scale(${scaleDiamond})`, zIndex: 20 }
                     : { filter: `brightness(${1 - p * 0.3})`, zIndex: 10 };
             case 'iris-cross':
                 // Plus shape expanding with easing
                 const easeCross = 1 - Math.pow(1 - p, 3);
                 const w = 20 + (80 * easeCross);
+                const scaleCross = 1 + 0.08 * (1 - easeCross);
                 return role === 'main' ? {
                     clipPath: `polygon(
                     ${50 - w / 2}% 0%, ${50 + w / 2}% 0%, ${50 + w / 2}% ${50 - w / 2}%, 
@@ -1277,6 +1416,7 @@ const Canvas: React.FC<CanvasProps> = ({
                     0% ${50 + w / 2}%, 0% ${50 - w / 2}%, ${50 - w / 2}% ${50 - w / 2}%
                 )`,
                     filter: `brightness(${0.7 + 0.3 * p})`,
+                    transform: `scale(${scaleCross})`,
                     zIndex: 20
                 } : { filter: `brightness(${1 - p * 0.3})`, zIndex: 10 };
 
@@ -1285,8 +1425,23 @@ const Canvas: React.FC<CanvasProps> = ({
             case 'wipe':
                 // Directional wipe with easing and edge brightness
                 const easeWipe = 1 - Math.pow(1 - p, 3);
+                const scaleWipe = 1 + 0.06 * (1 - easeWipe);
                 return role === 'main'
-                    ? { clipPath: `inset(${direction === 'right' ? `0 ${100 - (easeWipe * 100)}% 0 0` : direction === 'up' ? `${100 - (easeWipe * 100)}% 0 0 0` : direction === 'down' ? `0 0 ${100 - (easeWipe * 100)}% 0` : `0 0 0 ${100 - (easeWipe * 100)}%`})`, filter: `brightness(${0.8 + 0.2 * p})`, zIndex: 20 }
+                    ? {
+                        // MATCHING EXPORT ENGINE:
+                        // Left Direction = Reveal FROM Left (Crop Right side) -> inset(0 X 0 0)
+                        // Right Direction = Reveal FROM Right (Crop Left side) -> inset(0 0 0 X)
+                        // Up Direction = Reveal FROM Top (Crop Bottom side) -> inset(0 0 X 0)
+                        // Down Direction = Reveal FROM Bottom (Crop Top side) -> inset(X 0 0 0)
+                        clipPath: `inset(${direction === 'left' ? `0 ${100 - (easeWipe * 100)}% 0 0` :
+                            direction === 'right' ? `0 0 0 ${100 - (easeWipe * 100)}%` :
+                                direction === 'up' ? `0 0 ${100 - (easeWipe * 100)}% 0` :
+                                    ` ${100 - (easeWipe * 100)}% 0 0 0` // Down (default fallthrough or explicit)
+                            })`,
+                        filter: `brightness(${0.8 + 0.2 * p})`,
+                        transform: `scale(${scaleWipe})`,
+                        zIndex: 20
+                    }
                     : { filter: `brightness(${1 - p * 0.2})`, zIndex: 10 };
             case 'barn-doors':
                 // Barn doors with easing and brightness
@@ -1325,17 +1480,72 @@ const Canvas: React.FC<CanvasProps> = ({
                     zIndex: 20
                 } : { filter: `brightness(${1 - p * 0.2})`, zIndex: 10 };
             case 'checker-wipe':
-                // Checker wipe with dynamic scaling and brightness
+                // Checker wipe - growing tiles pattern matching ExportEngine
+                // Uses SVG mask to create 8x6 grid where even tiles grow from center
                 const easeChecker = 1 - Math.pow(1 - p, 2);
-                return role === 'main' ? {
-                    WebkitMaskImage: `conic-gradient(black 90deg, transparent 90deg, transparent 180deg, black 180deg, black 270deg, transparent 270deg)`,
-                    maskImage: `conic-gradient(black 90deg, transparent 90deg, transparent 180deg, black 180deg, black 270deg, transparent 270deg)`,
-                    WebkitMaskSize: `${200 * (1.2 - easeChecker * 0.2)}% ${200 * (1.2 - easeChecker * 0.2)}%`,
-                    maskSize: `${200 * (1.2 - easeChecker * 0.2)}% ${200 * (1.2 - easeChecker * 0.2)}%`,
-                    opacity: easeChecker,
-                    filter: `brightness(${0.8 + 0.2 * p})`,
-                    zIndex: 20
-                } : { opacity: 1 - easeChecker * 0.7, filter: `brightness(${1 - p * 0.2})`, zIndex: 10 };
+
+                if (role === 'main') {
+                    // Generate SVG mask for growing tiles
+                    // Grid 8x6. Pattern repeats every 2x2 tiles (4 units)
+                    // Width of pattern = 2/8 = 25%. Height = 2/6 = 33.333%
+                    const tileSizeW = 100 / 8;
+                    const tileSizeH = 100 / 6;
+
+                    // Current size of tiles
+                    const currentW = tileSizeW * easeChecker;
+                    const currentH = tileSizeH * easeChecker;
+
+                    // We need to draw 2 rects in the pattern: (0,0) and (1,1)
+                    // Coords inside the 2x2 tiling pattern (0..200 local space? No, use % relative to pattern)
+                    // easier to just generate full 48 rects or simplified pattern
+
+                    // Let's use a simpler approach: Encode the shape as a data URI
+                    // We need rects at even (i+j) positions.
+                    // rect at i,j center: (i*tw + tw/2, j*th + th/2)
+                    // width/height: easeChecker * tw, easeChecker * th
+
+                    // Construct SVG string
+                    let rects = '';
+                    const tw = 100 / 8;
+                    const th = 100 / 6;
+                    const cw = tw * easeChecker;
+                    const ch = th * easeChecker;
+
+                    for (let i = 0; i < 8; i++) {
+                        for (let j = 0; j < 6; j++) {
+                            if ((i + j) % 2 === 0) {
+                                const cx = i * tw + tw / 2;
+                                const cy = j * th + th / 2;
+                                const x = cx - cw / 2;
+                                const y = cy - ch / 2;
+                                // Use 2 decimal precision to save string length
+                                rects += `<rect x='${x.toFixed(2)}%' y='${y.toFixed(2)}%' width='${cw.toFixed(2)}%' height='${ch.toFixed(2)}%' fill='white'/>`;
+                            }
+                        }
+                    }
+
+                    // IMPORTANT: Must encode the SVG string for data URI, specifically for % characters
+                    const svgMask = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='100%' height='100%'>${rects}</svg>`)}`;
+
+                    return {
+                        WebkitMaskImage: `url("${svgMask}")`,
+                        maskImage: `url("${svgMask}")`,
+                        WebkitMaskRepeat: 'no-repeat',
+                        maskRepeat: 'no-repeat',
+                        WebkitMaskSize: '100% 100%',
+                        maskSize: '100% 100%',
+                        opacity: 0.3 + 0.7 * easeChecker, // Fade in
+                        filter: `brightness(${0.8 + 0.2 * p})`,
+                        zIndex: 20
+                    };
+                }
+
+                // Outgoing fades out
+                return {
+                    opacity: 1 - easeChecker * 0.7,
+                    filter: `brightness(${1 - p * 0.2})`,
+                    zIndex: 10
+                };
             case 'zig-zag':
                 // Zig-zag wipe with easing and brightness
                 const easeZigZag = 1 - Math.pow(1 - p, 3);
@@ -1387,20 +1597,33 @@ const Canvas: React.FC<CanvasProps> = ({
 
             // --- Legacy / Others ---
             case 'stack':
-                // Stack effect with depth and shadow
+                // 3D Stack - Final "Proper 3D" (Door Swing / Deck Effect)
+                const stackEase = 1 - Math.pow(1 - p, 3);
+
+                // Force horizontal direction for consistent 3D effect
+                const dirX = xMult === 0 ? 1 : (xMult > 0 ? 1 : -1);
+
                 if (role === 'main') {
+                    // Incoming: Swings in from side with heavy perspective
+                    // Starts offset, rotated away, and deep
+                    const x = dirX * 80 * (1 - stackEase); // 80% to 0
+                    const z = 200 * (1 - stackEase);       // 200px to 0
+                    const rot = dirX * -90 * (1 - stackEase); // -90deg (perpendicular) to 0
+
                     return {
-                        transform: `translate(${xMult * 100 * (1 - p)}%, ${yMult * 100 * (1 - p)}%) scale(${0.8 + 0.2 * p})`,
-                        boxShadow: `0 ${20 * (1 - p)}px ${40 * (1 - p)}px rgba(0,0,0,${0.6 * (1 - p)})`,
-                        filter: `blur(${(1 - p) * 3}px)`,
-                        opacity: 0.3 + 0.7 * p,
+                        transform: `perspective(600px) translate3d(${x}%, 0, ${z}px) rotateY(${rot}deg)`,
+                        boxShadow: `${dirX * -30}px 10px 50px rgba(0,0,0,${0.6 * (1 - stackEase)})`, // Strong shadow
                         zIndex: 20
                     };
                 } else {
+                    // Outgoing: Rotates slightly in opposite direction (reaction) and recedes
+                    const outRot = dirX * 30 * p; // 0 to 30deg
+                    const outScale = 1 - p * 0.2; // 1 to 0.8
+
                     return {
-                        transform: `scale(${1 - p * 0.2})`,
-                        filter: `brightness(${1 - p * 0.4}) blur(${p * 2}px)`,
-                        opacity: 1 - p * 0.3,
+                        transform: `perspective(600px) scale(${outScale}) rotateY(${outRot}deg) translateZ(-100px)`,
+                        filter: `brightness(${1 - p * 0.5})`,
+                        opacity: 1,
                         zIndex: 10
                     };
                 }
@@ -1579,7 +1802,12 @@ const Canvas: React.FC<CanvasProps> = ({
             case 'ripple':
                 return role === 'main' ? { transform: `scale(${1 + Math.sin(p * 10) * 0.05})`, opacity: p } : { opacity: 1 - p };
             case 'liquid':
-                return role === 'main' ? { opacity: p } : { opacity: 1 - p };
+                // Distinctive liquid wavy/morphing effect
+                const liquidWave = Math.sin(p * Math.PI * 3) * 0.05;
+                const liquidSkew = Math.sin(p * Math.PI * 2) * 3;
+                return role === 'main'
+                    ? { transform: `scaleY(${1 + liquidWave}) skewX(${liquidSkew}deg)`, filter: `blur(${(1 - p) * 4}px)`, opacity: p }
+                    : { transform: `scaleY(${1 - liquidWave}) skewX(${-liquidSkew}deg)`, filter: `blur(${p * 4}px)`, opacity: 1 - p };
             case 'stretch':
                 return role === 'main' ? { transform: `scaleX(${0.1 + 0.9 * p})`, opacity: p } : { transform: `scaleX(${1 + p})`, opacity: 1 - p };
 
@@ -1824,10 +2052,10 @@ const Canvas: React.FC<CanvasProps> = ({
         // For text items, we want auto-height so it grows with text content
         // We also override overflow to visible for text so content doesn't get clipped
         const finalStyle: React.CSSProperties = {
-            zIndex, inset: item.isBackground ? 0 : undefined,
+            zIndex, inset: item.isBackground && item.width === 100 && item.height === 100 ? 0 : undefined,
             ...posStyle,
-            width: item.isBackground ? '100%' : (item.width ? `${item.width}%` : 'auto'),
-            height: item.isBackground ? '100%' : (item.type === 'text' ? 'auto' : (item.height ? `${item.height}%` : 'auto')),
+            width: item.width ? `${item.width}%` : (item.isBackground ? '100%' : 'auto'),
+            height: item.type === 'text' ? 'auto' : (item.height ? `${item.height}%` : (item.isBackground ? '100%' : 'auto')),
             transform: itemTransform, opacity: isBuffered ? 0 : (isDragging && !item.isBackground && (Math.abs(item.x || 0) > 65 || Math.abs(item.y || 0) > 65) ? 0.4 : (item.opacity ?? 100) / 100),
             ...maskStyle, filter: combinedFilterStyle, ...transitionStyle,
             mixBlendMode: (transitionStyle as any).mixBlendMode,
@@ -1864,7 +2092,7 @@ const Canvas: React.FC<CanvasProps> = ({
                         ...borderRadiusStyle,
                         ...clipPathStyle,
                     }}
-                    className={`relative ${item.type === 'text' ? 'overflow-visible' : 'overflow-hidden'} pointer-events-none ${animationClass} ${!item.isBackground ? 'flex items-center justify-center' : ''}`}
+                    className={`relative ${item.type === 'text' ? 'overflow-visible' : 'overflow-hidden'} pointer-events-none ${animationClass}`}
                 >
                     {vignetteOpacity > 0 && <div className="absolute inset-0 z-10 pointer-events-none" style={{ background: `radial-gradient(circle, transparent 50%, rgba(0,0,0,${vignetteOpacity}) 100%)`, ...borderRadiusStyle }}></div>}
                     {(!isErasing || item.type === 'text' || item.type === 'color') && (
@@ -1874,18 +2102,19 @@ const Canvas: React.FC<CanvasProps> = ({
                                     <video
                                         ref={(el) => { mediaRefs.current[item.id] = el; }}
                                         src={item.src}
-                                        className={`pointer-events-none block ${item.isBackground ? 'w-full h-full' : 'w-auto h-auto max-w-full max-h-full shadow-sm'}`}
+                                        className={`pointer-events-none block w-full h-full ${!item.isBackground && 'shadow-sm'}`}
                                         style={{
-                                            objectFit: item.isBackground ? (item.fit || 'cover') : 'contain',
+                                            objectFit: (item.isBackground && item.width === 100 && item.height === 100) ? (item.fit || 'cover') : 'fill', // Resized items use 'fill'
                                             objectPosition,
                                             transform: cropTransform,
                                             boxSizing: 'border-box',
                                             ...borderStyle,
                                             ...borderRadiusStyle,
-                                            // Hide video element ONLY when GPU is rendering AND no animation AND no transition
+                                            // Hide video element ONLY when GPU is rendering AND full-size background AND no animation AND no transition
+                                            // Resized backgrounds render via DOM, so they should NOT be hidden
                                             // Animated/transitioning videos MUST stay visible for CSS effects to work
                                             // IMPORTANT: Don't set opacity when transitioning - parent container handles it
-                                            ...((gpuReady && item.isBackground && !item.animation && !obj.transition) ? { opacity: 0 } : {}),
+                                            ...((gpuReady && item.isBackground && (item.width ?? 100) === 100 && (item.height ?? 100) === 100 && !item.animation && !obj.transition) ? { opacity: 0 } : {}),
                                             // Force visibility for animated videos
                                             ...(item.animation ? {
                                                 display: 'block',
@@ -1917,9 +2146,9 @@ const Canvas: React.FC<CanvasProps> = ({
                                     <img
                                         ref={(el) => { mediaRefs.current[item.id] = el; }}
                                         src={item.src}
-                                        className={`pointer-events-none block ${item.isBackground ? 'w-full h-full' : 'w-auto h-auto max-w-full max-h-full shadow-sm'}`}
+                                        className={`pointer-events-none block w-full h-full ${!item.isBackground && 'shadow-sm'}`}
                                         style={{
-                                            objectFit: item.isBackground ? (item.fit || 'cover') : 'contain',
+                                            objectFit: (item.isBackground && item.width === 100 && item.height === 100) ? (item.fit || 'cover') : 'fill', // Resized items use 'fill'
                                             objectPosition,
                                             transform: cropTransform,
                                             boxSizing: 'border-box',
@@ -1989,9 +2218,9 @@ const Canvas: React.FC<CanvasProps> = ({
         else {
             const children = [];
             if (isDragging && !item.isBackground) children.push(contentJsx);
-            if (isSelected && interactionMode === 'none' && !item.isBackground) {
+            if (isSelected && interactionMode === 'none') {
                 children.push(
-                    <div key={`overlay-${item.id}`} className="absolute pointer-events-none flex items-center justify-center origin-center" style={{ zIndex, ...posStyle, width: item.isBackground ? '100%' : (item.width ? `${item.width}%` : 'auto'), height: item.isBackground ? '100%' : (item.type === 'text' ? 'auto' : (item.height ? `${item.height}%` : 'auto')), transform: itemTransform }}>
+                    <div key={`overlay-${item.id}`} className="absolute pointer-events-none flex items-center justify-center origin-center" style={{ zIndex, ...posStyle, width: item.width ? `${item.width}%` : (item.isBackground ? '100%' : 'auto'), height: item.type === 'text' ? 'auto' : (item.height ? `${item.height}%` : (item.isBackground ? '100%' : 'auto')), transform: itemTransform }}>
                         <div style={{ width: '100%', height: '100%', ...animationStyle }} className={animationClass}>
                             {/* Invisible Text Clone to Force Selection Box to Fit Content EXACTLY including padding */}
                             {item.type === 'text' && (
@@ -2120,6 +2349,17 @@ const Canvas: React.FC<CanvasProps> = ({
                         if (!isDrawing && !isDraggingItem && !isResizing && !isRotating) {
                             e.preventDefault();
                             e.stopPropagation();
+
+                            // If editing text, save the text content first before deselecting
+                            if (isEditingText && textInputRef.current && selectedItemId) {
+                                const track = tracks.find(t => t.items.some(i => i.id === selectedItemId));
+                                const item = track?.items.find(i => i.id === selectedItemId);
+                                if (item && track) {
+                                    onUpdateClip(track.id, { ...item, name: textInputRef.current.innerText });
+                                }
+                                setIsEditingText(false);
+                            }
+
                             if (selectedItemId) onSelectClip('', null);
 
                             setInteractionMode('none');
